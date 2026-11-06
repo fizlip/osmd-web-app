@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Ring Rotator</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #fff; color: #000;
+    font-family: system-ui, -apple-system, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2rem; padding: 1rem;
+    -webkit-user-select: none; user-select: none;
+  }
+  #ring {
+    width: min(72vw, 42vh); height: auto;
+    touch-action: none; cursor: grab;
+  }
+  #ring.dragging { cursor: grabbing; }
+  #readout { font-size: 1.8rem; font-weight: 600; text-anchor: middle; }
+  .buttons { display: flex; gap: .75rem; flex-wrap: wrap; justify-content: center; }
+  .buttons button {
+    font: inherit; font-size: 1.1rem; padding: .3rem 1.5rem;
+    background: #ffffff; color: #000; border-radius: 20px;
+    cursor: pointer;
+    border: none;
+  }
+  .buttons button:active { background: #dcdcdc; color: #000; }
+  #send { background: #4172ff; color: #fff; }
+  #send:active { background: #444; }
+  #status { min-height: 1.2em; font-size: .85rem; color: #888; }
+  #status.err { color: #c00; }
+</style>
+</head>
+<body>
+
+<svg id="ring" viewBox="0 0 200 200">
+  <circle cx="100" cy="100" r="86" fill="none" stroke="#000" stroke-width="5"/>
+  <g id="marker">
+    <circle cx="186" cy="100" r="9" fill="#000"/>
+  </g>
+  <text id="readout" x="100" y="108">0&deg;</text>
+</svg>
+
+<div class="buttons">
+  <button data-delta="-90">-90&deg;</button>
+  <button data-delta="-45">-45&deg;</button>
+  <button data-delta="45">+45&deg;</button>
+  <button data-delta="90">+90&deg;</button>
+  <button id="send">Send</button>
+</div>
+
+<div id="status"></div>
+
+<script>
+const ring = document.getElementById('ring');
+const marker = document.getElementById('marker');
+const readout = document.getElementById('readout');
+const statusEl = document.getElementById('status');
+
+let angle = 0;       // absolute target angle in degrees, normalized to [0, 360)
+let dragging = false;
+
+function normalize(a) {
+  a = ((a % 360) + 360) % 360;   // [0, 360)
+  return a > 180 ? a - 360 : a;  // (-180, 180]
+}
+
+function render() {
+  marker.setAttribute('transform', `rotate(${-angle} 100 100)`);
+  readout.textContent = `${Math.round(angle)}°`;
+}
+
+function pointerAngle(e) {
+  const r = ring.getBoundingClientRect();
+  const dx = e.clientX - (r.left + r.width / 2);
+  const dy = e.clientY - (r.top + r.height / 2);
+  return normalize(-Math.atan2(dy, dx) * 180 / Math.PI);
+}
+
+ring.addEventListener('pointerdown', e => {
+  dragging = true;
+  ring.classList.add('dragging');
+  ring.setPointerCapture(e.pointerId);
+  angle = pointerAngle(e);
+  render();
+});
+ring.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  angle = pointerAngle(e);
+  render();
+});
+ring.addEventListener('pointerup', () => {
+  dragging = false;
+  ring.classList.remove('dragging');
+});
+ring.addEventListener('pointercancel', () => {
+  dragging = false;
+  ring.classList.remove('dragging');
+});
+
+document.querySelectorAll('.buttons button[data-delta]').forEach(b =>
+  b.addEventListener('click', () => {
+    angle = normalize(angle + parseFloat(b.dataset.delta));
+    render();
+  }));
+
+document.getElementById('send').addEventListener('click', send);
+
+async function send() {
+  statusEl.textContent = 'sending…';
+  statusEl.className = '';
+  try {
+    const r = await fetch('/api/rotate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ angle }),
+    });
+    const j = await r.json();
+    if (j.error || !j.ok) {
+      statusEl.textContent = j.error || j.response || 'failed';
+      statusEl.className = 'err';
+    } else {
+      statusEl.textContent = 'OK';
+    }
+  } catch {
+    statusEl.textContent = 'server unreachable';
+    statusEl.className = 'err';
+  }
+}
+
+render();
+</script>
+</body>
+</html>

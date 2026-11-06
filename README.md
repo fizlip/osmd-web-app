@@ -1,0 +1,75 @@
+# Ring Rotator Website
+
+A small web app for the Raspberry Pi that lets a user set a rotation angle in
+a browser and relays it to an Arduino over USB serial.
+
+- UI: `index.html` served by `server.py` (Python stdlib HTTP server, no web framework)
+- API: `POST /api/rotate` with `{"angle": 123.4}` writes `DET_POL_ABS:123.4\n`
+  to the serial port, reads the reply until a line that is exactly `OK`, and
+  returns the Arduino's text to the page
+- The serial port is opened once and kept open (opening `/dev/ttyACM0` toggles
+  DTR, which resets the Arduino — re-opening per click would reset it every time)
+- Designed to extend to 4 motors later: add a `motor` field to the request and
+  parameterize the command string
+
+## Run on the Raspberry Pi
+
+```bash
+sudo apt update
+sudo apt install -y python3-serial        # or: pip install -r requirements.txt
+sudo usermod -aG dialout "$USER"          # then log out and back in
+python3 server.py
+```
+
+Then browse to `http://<pi-address>:8000` from any machine on the network.
+
+Options:
+
+```
+--port /dev/ttyACM0   serial device (default)
+--baud 9600           must match the Arduino's Serial.begin() rate
+--http-port 8000      HTTP listen port
+--bind 0.0.0.0        HTTP listen address
+--simulate            run with no hardware; returns fake "OK" replies
+```
+
+## Things to check on the Arduino side
+
+- **Baud rate**: `--baud` must equal the `Serial.begin(...)` in the sketch
+- **Line ending**: the server sends the command followed by `\n`. If the sketch
+  expects `\r\n`, change `b"\n"` to `b"\r\n"` in `server.py`
+- **End of reply**: the server treats a line containing only `OK` (whitespace
+  around it is fine) as end-of-message, per the firmware protocol
+
+## Run it at boot (systemd)
+
+Create `/etc/systemd/system/ring-rotator.service`:
+
+```ini
+[Unit]
+Description=Ring rotator web server
+After=dev-ttyACM0.device
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/website/server.py
+Restart=on-failure
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then:
+
+```bash
+sudo systemctl enable --now ring-rotator
+```
+
+## Test without hardware
+
+On any machine (e.g. your Mac):
+
+```bash
+python3 server.py --simulate
+curl -X POST localhost:8000/api/rotate -H 'Content-Type: application/json' -d '{"angle": 90}'
+```
