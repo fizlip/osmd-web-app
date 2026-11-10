@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #fff; color: #000;
+    font-family: system-ui, -apple-system, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 1rem; padding: 1rem;
+  }
+  img { max-width: 100%; max-height: 75vh; background: #eee; }
+  a, #status { font-size: .85rem; color: #888; text-decoration: none; }
+  #status { min-height: 1.2em; }
+</style>
+</head>
+<body>
+
+<img id="cam" src="/api/stream" alt="live camera feed">
+<div id="status"></div>
+<a href="/">&larr; controls</a>
+
+<script>
+  document.getElementById('cam').addEventListener('error', () =>
+    document.getElementById('status').textContent = 'camera stream unavailable');
+</script>
+</body>
+</html>

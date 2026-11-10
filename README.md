@@ -3,20 +3,27 @@
 A small web app for the Raspberry Pi that lets a user set a rotation angle in
 a browser and relays it to an Arduino over USB serial.
 
-- UI: `index.html` served by `server.py` (Python stdlib HTTP server, no web framework)
-- API: `POST /api/rotate` with `{"angle": 123.4}` writes `DET_POL_ABS:123.4\n`
-  to the serial port, reads the reply until a line that is exactly `OK`, and
-  returns the Arduino's text to the page
+- UI: `index.html` served by `server.py` (Python stdlib HTTP server, no web
+  framework) — a draggable wireframe sphere: vertical drag sets the polar angle,
+  horizontal drag sets the azimuth; a Send button commits both
+- API: `POST /api/rotate` with `{"polar": 30, "azimuth": -45}` writes
+  `DET_POL_ABS:30\n` then `DET_AZ_ABS:-45\n` to the serial port (either field
+  may be omitted; `angle` is a legacy alias for `polar`). Each reply is read
+  until a line that is exactly `OK`, and the combined text is returned
 - The serial port is opened once and kept open (opening `/dev/ttyACM0` toggles
   DTR, which resets the Arduino — re-opening per click would reset it every time)
-- Designed to extend to 4 motors later: add a `motor` field to the request and
-  parameterize the command string
+- Camera: `GET /camera` serves a page showing the Pi Camera via an MJPEG
+  stream at `GET /api/stream` (uses `picamera2`; in `--simulate` mode it emits
+  a generated test pattern)
+- Designed to extend to 4 motors later: add more fields to the request and
+  more command strings
 
 ## Run on the Raspberry Pi
 
 ```bash
 sudo apt update
 sudo apt install -y python3-serial        # or: pip install -r requirements.txt
+sudo apt install -y python3-picamera2     # for the /camera page (Pi OS >= Bullseye)
 sudo usermod -aG dialout "$USER"          # then log out and back in
 python3 server.py
 ```
@@ -71,5 +78,5 @@ On any machine (e.g. your Mac):
 
 ```bash
 python3 server.py --simulate
-curl -X POST localhost:8000/api/rotate -H 'Content-Type: application/json' -d '{"angle": 90}'
+curl -X POST localhost:8000/api/rotate -H 'Content-Type: application/json' -d '{"polar": 90, "azimuth": -45}'
 ```

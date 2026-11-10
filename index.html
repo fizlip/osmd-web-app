@@ -11,99 +11,177 @@
     background: #fff; color: #000;
     font-family: system-ui, -apple-system, sans-serif;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 2rem; padding: 1rem;
+    gap: 1.25rem; padding: 1rem;
     -webkit-user-select: none; user-select: none;
   }
-  #ring {
-    width: min(72vw, 42vh); height: auto;
-    touch-action: none; cursor: grab;
-  }
-  #ring.dragging { cursor: grabbing; }
-  #readout { font-size: 1.8rem; font-weight: 600; text-anchor: middle; }
-  .buttons { display: flex; gap: .75rem; flex-wrap: wrap; justify-content: center; }
+  #sphere { touch-action: none; cursor: grab; }
+  #sphere.dragging { cursor: grabbing; }
+  #readout { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .buttons { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: center; align-items: center; }
+  .buttons .lbl { font-size: .85rem; color: #888; width: 4rem; text-align: right; }
   .buttons button {
-    font: inherit; font-size: 1.1rem; padding: .3rem 1.5rem;
+    font: inherit; font-size: 1rem; padding: .35rem 1.1rem;
     background: #ffffff; color: #000; border-radius: 20px;
-    cursor: pointer;
-    border: none;
+    cursor: pointer; border: none;
+    box-shadow: 0 0 0 1px #ddd;
   }
   .buttons button:active { background: #dcdcdc; color: #000; }
-  #send { background: #4172ff; color: #fff; }
-  #send:active { background: #444; }
+  #send { background: #4172ff; color: #fff; padding: .6rem 1.8rem; font-size: 1.1rem;
+          border: none; border-radius: 20px; cursor: pointer; }
+  #send:active { background: #2c53cc; }
   #status { min-height: 1.2em; font-size: .85rem; color: #888; }
   #status.err { color: #c00; }
+  .nav { font-size: .85rem; color: #888; text-decoration: none; }
 </style>
 </head>
 <body>
 
-<svg id="ring" viewBox="0 0 200 200">
-  <circle cx="100" cy="100" r="86" fill="none" stroke="#000" stroke-width="5"/>
-  <g id="marker">
-    <circle cx="186" cy="100" r="9" fill="#000"/>
-  </g>
-  <text id="readout" x="100" y="108">0&deg;</text>
-</svg>
+<canvas id="sphere"></canvas>
+<div id="readout"></div>
 
 <div class="buttons">
-  <button data-delta="-90">-90&deg;</button>
-  <button data-delta="-45">-45&deg;</button>
-  <button data-delta="45">+45&deg;</button>
-  <button data-delta="90">+90&deg;</button>
-  <button id="send">Send</button>
+  <span class="lbl">polar</span>
+  <button data-axis="polar" data-delta="-90">-90&deg;</button>
+  <button data-axis="polar" data-delta="-45">-45&deg;</button>
+  <button data-axis="polar" data-delta="45">+45&deg;</button>
+  <button data-axis="polar" data-delta="90">+90&deg;</button>
 </div>
+<div class="buttons">
+  <span class="lbl">azimuth</span>
+  <button data-axis="azimuth" data-delta="-90">-90&deg;</button>
+  <button data-axis="azimuth" data-delta="-45">-45&deg;</button>
+  <button data-axis="azimuth" data-delta="45">+45&deg;</button>
+  <button data-axis="azimuth" data-delta="90">+90&deg;</button>
+</div>
+<button id="send">Send</button>
 
 <div id="status"></div>
+<a class="nav" href="/camera">camera &rarr;</a>
 
 <script>
-const ring = document.getElementById('ring');
-const marker = document.getElementById('marker');
+const canvas = document.getElementById('sphere');
+const ctx = canvas.getContext('2d');
 const readout = document.getElementById('readout');
 const statusEl = document.getElementById('status');
 
-let angle = 0;       // absolute target angle in degrees, normalized to [0, 360)
-let dragging = false;
+// polar: elevation on the sphere (-180..180, 0 = front, +90 = top)
+// azimuth: orbit around the vertical axis (-180..180, 0 = right limb, +90 = back)
+let polar = 0, azimuth = 0;
+let dragging = false, startX = 0, startY = 0, startPolar = 0, startAzimuth = 0;
+const DEG_PER_PX = 0.6;
+
+let R = 0, CX = 0, CY = 0;
 
 function normalize(a) {
   a = ((a % 360) + 360) % 360;   // [0, 360)
   return a > 180 ? a - 360 : a;  // (-180, 180]
 }
 
+// (elevation, azimuth) degrees -> unit sphere; +x right, +y screen-down, +z toward viewer
+// azimuth is shifted +90 so that 0 sits on the right limb of the sphere
+function pt(el, az) {
+  const e = el * Math.PI / 180, a = (az + 90) * Math.PI / 180;
+  const c = Math.cos(e);
+  return { x: c * Math.sin(a), y: -Math.sin(e), z: c * Math.cos(a) };
+}
+
+function drawPath(pts, frontWidth, backWidth) {
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p = pts[i], q = pts[i + 1];
+    const front = (p.z + q.z) / 2 >= 0;
+    ctx.strokeStyle = front ? '#000' : '#ccc';
+    ctx.lineWidth = front ? frontWidth : backWidth;
+    ctx.beginPath();
+    ctx.moveTo(CX + p.x * R, CY + p.y * R);
+    ctx.lineTo(CX + q.x * R, CY + q.y * R);
+    ctx.stroke();
+  }
+}
+
 function render() {
-  marker.setAttribute('transform', `rotate(${-angle} 100 100)`);
-  readout.textContent = `${Math.round(angle)}°`;
+  ctx.clearRect(0, 0, CX * 2, CY * 2);
+
+  // latitude circles every 15deg
+  for (let el = -75; el <= 75; el += 15) {
+    const pts = [];
+    for (let a = 0; a <= 360; a += 4) pts.push(pt(el, a));
+    drawPath(pts, 1, 1);
+  }
+  // longitude circles every 30deg
+  for (let az = 0; az < 360; az += 30) {
+    const pts = [];
+    for (let el = -90; el <= 90; el += 4) pts.push(pt(el, az));
+    drawPath(pts, 1, 1);
+  }
+  // sphere outline
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(CX, CY, R, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // the physical ring = meridian at the current azimuth, drawn heavier
+  const ringPts = [];
+  for (let el = -90; el <= 90; el += 3) ringPts.push(pt(el, azimuth));
+  drawPath(ringPts, 3, 1.5);
+
+  // marker
+  const m = pt(polar, azimuth);
+  const mr = R * 0.05 * (0.75 + 0.25 * m.z);
+  ctx.beginPath();
+  ctx.arc(CX + m.x * R, CY + m.y * R, mr, 0, Math.PI * 2);
+  if (m.z >= 0) {
+    ctx.fillStyle = '#000';
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.strokeStyle = '#999';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  readout.textContent = `polar ${Math.round(polar)}°   azimuth ${Math.round(azimuth)}°`;
 }
 
-function pointerAngle(e) {
-  const r = ring.getBoundingClientRect();
-  const dx = e.clientX - (r.left + r.width / 2);
-  const dy = e.clientY - (r.top + r.height / 2);
-  return normalize(-Math.atan2(dy, dx) * 180 / Math.PI);
+function resize() {
+  const size = Math.min(window.innerWidth * 0.75, window.innerHeight * 0.45);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width = canvas.style.height = size + 'px';
+  canvas.width = canvas.height = Math.round(size * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  CX = CY = size / 2;
+  R = size * 0.44;
+  render();
 }
 
-ring.addEventListener('pointerdown', e => {
+canvas.addEventListener('pointerdown', e => {
   dragging = true;
-  ring.classList.add('dragging');
-  ring.setPointerCapture(e.pointerId);
-  angle = pointerAngle(e);
-  render();
+  startX = e.clientX; startY = e.clientY;
+  startPolar = polar; startAzimuth = azimuth;
+  canvas.classList.add('dragging');
+  canvas.setPointerCapture(e.pointerId);
 });
-ring.addEventListener('pointermove', e => {
+canvas.addEventListener('pointermove', e => {
   if (!dragging) return;
-  angle = pointerAngle(e);
+  azimuth = normalize(startAzimuth + (e.clientX - startX) * DEG_PER_PX);
+  polar = normalize(startPolar - (e.clientY - startY) * DEG_PER_PX);
   render();
 });
-ring.addEventListener('pointerup', () => {
+canvas.addEventListener('pointerup', () => {
   dragging = false;
-  ring.classList.remove('dragging');
+  canvas.classList.remove('dragging');
 });
-ring.addEventListener('pointercancel', () => {
+canvas.addEventListener('pointercancel', () => {
   dragging = false;
-  ring.classList.remove('dragging');
+  canvas.classList.remove('dragging');
 });
 
-document.querySelectorAll('.buttons button[data-delta]').forEach(b =>
+document.querySelectorAll('.buttons button[data-axis]').forEach(b =>
   b.addEventListener('click', () => {
-    angle = normalize(angle + parseFloat(b.dataset.delta));
+    const d = parseFloat(b.dataset.delta);
+    if (b.dataset.axis === 'polar') polar = normalize(polar + d);
+    else azimuth = normalize(azimuth + d);
     render();
   }));
 
@@ -116,7 +194,7 @@ async function send() {
     const r = await fetch('/api/rotate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ angle }),
+      body: JSON.stringify({ polar, azimuth }),
     });
     const j = await r.json();
     if (j.error || !j.ok) {
@@ -131,7 +209,8 @@ async function send() {
   }
 }
 
-render();
+window.addEventListener('resize', resize);
+resize();
 </script>
 </body>
 </html>
