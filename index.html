@@ -104,7 +104,7 @@ function normalize(a) {
 function pt(el, az) {
   const e = el * Math.PI / 180, a = (az + 90) * Math.PI / 180;
   const c = Math.cos(e);
-  return new THREE.Vector3(c * Math.sin(a), -Math.sin(e), c * Math.cos(a));
+  return new THREE.Vector3(c * Math.sin(a), Math.sin(e), c * Math.cos(a));
 }
 
 // opaque white sphere slightly inside the grid: hides back-side lines
@@ -133,6 +133,25 @@ const ringMesh = new THREE.Mesh(
   new THREE.TorusGeometry(1.002, 0.008, 8, 128),
   new THREE.MeshBasicMaterial({ color: 0x000000 }));
 scene.add(ringMesh);
+
+// xyz axis guides through the origin (x red, y green, z blue)
+function axis(dir, color) {
+  const g = new THREE.CylinderGeometry(0.012, 0.012, 2.5, 8);
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color }));
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  scene.add(m);
+}
+axis(new THREE.Vector3(1, 0, 0), 0xd05050);
+axis(new THREE.Vector3(0, 1, 0), 0x3d9e3d);
+axis(new THREE.Vector3(0, 0, 1), 0x5070d0);
+
+// zero point: small ring flat on the sphere surface at polar=0, azimuth=0
+const zeroMark = new THREE.Mesh(
+  new THREE.TorusGeometry(0.08, 0.01, 8, 32),
+  new THREE.MeshBasicMaterial({ color: 0x000000 }));
+zeroMark.position.copy(pt(0, 0)).multiplyScalar(1.01);
+zeroMark.rotation.y = Math.PI / 2;  // tangent to the surface at +x
+scene.add(zeroMark);
 
 // marker: always drawn on top so the target stays visible through the sphere
 const marker = new THREE.Mesh(
@@ -176,7 +195,7 @@ function pickOrLimb(e) {
 
 function setFromPoint(p) {
   const v = p.clone().normalize();
-  polar = -Math.asin(THREE.MathUtils.clamp(v.y, -1, 1)) * 180 / Math.PI;
+  polar = Math.asin(THREE.MathUtils.clamp(v.y, -1, 1)) * 180 / Math.PI;
   azimuth = normalize(Math.atan2(v.x, v.z) * 180 / Math.PI - 90);
   syncVisuals();
 }
