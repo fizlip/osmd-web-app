@@ -29,6 +29,15 @@
   #send { background: #4172ff; color: #fff; padding: .6rem 1.8rem; font-size: 1.1rem;
           border: none; border-radius: 20px; cursor: pointer; }
   #send:active { background: #2c53cc; }
+  #zero { background: #fff; color: #000; padding: .6rem 1.8rem; font-size: 1.1rem;
+          border: none; border-radius: 20px; cursor: pointer;
+          box-shadow: 0 0 0 1px #999; }
+  #zero:active { background: #dcdcdc; }
+  .angle {
+    width: 5.5rem; font: inherit; font-size: 1rem; padding: .35rem .6rem;
+    border: none; border-radius: 20px; box-shadow: 0 0 0 1px #ddd;
+    text-align: right;
+  }
   #status { min-height: 1.2em; font-size: .85rem; color: #888; }
   #status.err { color: #c00; }
   .nav { font-size: .85rem; color: #888; text-decoration: none; }
@@ -41,6 +50,7 @@
 
 <div class="buttons">
   <span class="lbl">polar</span>
+  <input class="angle" id="polarInput" type="number" step="any" value="0">
   <button data-axis="polar" data-delta="-90">-90&deg;</button>
   <button data-axis="polar" data-delta="-45">-45&deg;</button>
   <button data-axis="polar" data-delta="45">+45&deg;</button>
@@ -48,142 +58,189 @@
 </div>
 <div class="buttons">
   <span class="lbl">azimuth</span>
+  <input class="angle" id="azInput" type="number" step="any" value="0">
   <button data-axis="azimuth" data-delta="-90">-90&deg;</button>
   <button data-axis="azimuth" data-delta="-45">-45&deg;</button>
   <button data-axis="azimuth" data-delta="45">+45&deg;</button>
   <button data-axis="azimuth" data-delta="90">+90&deg;</button>
 </div>
-<button id="send">Send</button>
+<div class="buttons">
+  <button id="send">Send</button>
+  <button id="zero">Zero</button>
+</div>
 
 <div id="status"></div>
 <a class="nav" href="/camera">camera &rarr;</a>
 
-<script>
+<script type="module">
+import * as THREE from './libs/three.module.min.js';
+import { OrbitControls } from './libs/OrbitControls.js';
+
 const canvas = document.getElementById('sphere');
-const ctx = canvas.getContext('2d');
 const readout = document.getElementById('readout');
 const statusEl = document.getElementById('status');
+const polarInput = document.getElementById('polarInput');
+const azInput = document.getElementById('azInput');
 
-// polar: elevation on the sphere (-180..180, 0 = front, +90 = top)
-// azimuth: orbit around the vertical axis (-180..180, 0 = right limb, +90 = back)
+// polar: elevation (-180..180, 0 = front equator, +90 = north pole)
+// azimuth: orbit around vertical (-180..180, 0 = right limb, +90 = back)
 let polar = 0, azimuth = 0;
-let dragging = false, startX = 0, startY = 0, startPolar = 0, startAzimuth = 0;
-const DEG_PER_PX = 0.6;
+let markerDrag = false, controls = null;
 
-let R = 0, CX = 0, CY = 0;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setClearColor(0xffffff);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+camera.position.set(1.7, 0.9, 2.9);
+camera.lookAt(0, 0, 0);
 
 function normalize(a) {
   a = ((a % 360) + 360) % 360;   // [0, 360)
   return a > 180 ? a - 360 : a;  // (-180, 180]
 }
 
-// (elevation, azimuth) degrees -> unit sphere; +x right, +y screen-down, +z toward viewer
-// azimuth is shifted +90 so that 0 sits on the right limb of the sphere
+// (elevation, azimuth) degrees -> unit-sphere Vector3
+// azimuth is shifted +90 so that 0 sits on the right limb
 function pt(el, az) {
   const e = el * Math.PI / 180, a = (az + 90) * Math.PI / 180;
   const c = Math.cos(e);
-  return { x: c * Math.sin(a), y: -Math.sin(e), z: c * Math.cos(a) };
+  return new THREE.Vector3(c * Math.sin(a), -Math.sin(e), c * Math.cos(a));
 }
 
-function drawPath(pts, frontWidth, backWidth) {
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p = pts[i], q = pts[i + 1];
-    const front = (p.z + q.z) / 2 >= 0;
-    ctx.strokeStyle = front ? '#000' : '#ccc';
-    ctx.lineWidth = front ? frontWidth : backWidth;
-    ctx.beginPath();
-    ctx.moveTo(CX + p.x * R, CY + p.y * R);
-    ctx.lineTo(CX + q.x * R, CY + q.y * R);
-    ctx.stroke();
-  }
+// opaque white sphere slightly inside the grid: hides back-side lines
+const occluder = new THREE.Mesh(
+  new THREE.SphereGeometry(0.995, 48, 32),
+  new THREE.MeshBasicMaterial({ color: 0xffffff }));
+scene.add(occluder);
+
+// lat/long grid
+const gridMat = new THREE.LineBasicMaterial({ color: 0x000000 });
+for (let el = -75; el <= 75; el += 15) {
+  const pts = [];
+  for (let a = 0; a <= 360; a += 5) pts.push(pt(el, a));
+  scene.add(new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(pts), gridMat));
+}
+for (let az = 0; az < 360; az += 30) {
+  const pts = [];
+  for (let el = -90; el <= 90; el += 5) pts.push(pt(el, az));
+  scene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts), gridMat));
 }
 
-function render() {
-  ctx.clearRect(0, 0, CX * 2, CY * 2);
+// the physical ring = a real 3D torus lying on the meridian at `azimuth`
+const ringMesh = new THREE.Mesh(
+  new THREE.TorusGeometry(1.002, 0.008, 8, 128),
+  new THREE.MeshBasicMaterial({ color: 0x000000 }));
+scene.add(ringMesh);
 
-  // latitude circles every 15deg
-  for (let el = -75; el <= 75; el += 15) {
-    const pts = [];
-    for (let a = 0; a <= 360; a += 4) pts.push(pt(el, a));
-    drawPath(pts, 1, 1);
-  }
-  // longitude circles every 30deg
-  for (let az = 0; az < 360; az += 30) {
-    const pts = [];
-    for (let el = -90; el <= 90; el += 4) pts.push(pt(el, az));
-    drawPath(pts, 1, 1);
-  }
-  // sphere outline
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(CX, CY, R, 0, Math.PI * 2);
-  ctx.stroke();
+// marker: always drawn on top so the target stays visible through the sphere
+const marker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.045, 24, 16),
+  new THREE.MeshBasicMaterial({ color: 0x000000, depthTest: false }));
+marker.renderOrder = 10;
+scene.add(marker);
 
-  // the physical ring = meridian at the current azimuth, drawn heavier
-  const ringPts = [];
-  for (let el = -90; el <= 90; el += 3) ringPts.push(pt(el, azimuth));
-  drawPath(ringPts, 3, 1.5);
-
-  // marker
-  const m = pt(polar, azimuth);
-  const mr = R * 0.05 * (0.75 + 0.25 * m.z);
-  ctx.beginPath();
-  ctx.arc(CX + m.x * R, CY + m.y * R, mr, 0, Math.PI * 2);
-  if (m.z >= 0) {
-    ctx.fillStyle = '#000';
-    ctx.fill();
-  } else {
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    ctx.strokeStyle = '#999';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  }
-
+function syncVisuals() {
+  marker.position.copy(pt(polar, azimuth));
+  ringMesh.rotation.y = azimuth * Math.PI / 180;
   readout.textContent = `polar ${Math.round(polar)}°   azimuth ${Math.round(azimuth)}°`;
+  if (document.activeElement !== polarInput) polarInput.value = +polar.toFixed(1);
+  if (document.activeElement !== azInput) azInput.value = +azimuth.toFixed(1);
 }
+
+// --- pointer: raycast the sphere; hit -> drag marker, miss -> orbit camera ---
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+
+function pick(e) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1,
+          -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObject(occluder);
+  return hits.length ? hits[0].point : null;
+}
+
+// during a drag, a ray that misses the sphere picks the limb point
+// closest to it so the marker keeps following past the silhouette
+function pickOrLimb(e) {
+  const p = pick(e);
+  if (p) return p;
+  const ray = raycaster.ray;
+  const t = -ray.origin.dot(ray.direction);   // closest approach to center
+  return ray.origin.clone()
+    .addScaledVector(ray.direction, Math.max(t, 0))
+    .setLength(1);
+}
+
+function setFromPoint(p) {
+  const v = p.clone().normalize();
+  polar = -Math.asin(THREE.MathUtils.clamp(v.y, -1, 1)) * 180 / Math.PI;
+  azimuth = normalize(Math.atan2(v.x, v.z) * 180 / Math.PI - 90);
+  syncVisuals();
+}
+
+// registered before OrbitControls so a hit can claim the pointer first
+canvas.addEventListener('pointerdown', e => {
+  const p = pick(e);
+  if (!p) return;
+  markerDrag = true;
+  controls.enabled = false;
+  canvas.setPointerCapture(e.pointerId);
+  e.stopImmediatePropagation();
+  canvas.classList.add('dragging');
+  setFromPoint(p);
+});
+window.addEventListener('pointermove', e => {
+  if (!markerDrag) return;
+  setFromPoint(pickOrLimb(e));
+});
+function endDrag() {
+  if (!markerDrag) return;
+  markerDrag = false;
+  controls.enabled = true;
+  canvas.classList.remove('dragging');
+}
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
+
+controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.enablePan = false;
+controls.minDistance = 1.6;
+controls.maxDistance = 6;
 
 function resize() {
-  const size = Math.min(window.innerWidth * 0.75, window.innerHeight * 0.45);
-  const dpr = window.devicePixelRatio || 1;
-  canvas.style.width = canvas.style.height = size + 'px';
-  canvas.width = canvas.height = Math.round(size * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  CX = CY = size / 2;
-  R = size * 0.44;
-  render();
+  const size = Math.min(window.innerWidth * 0.85, window.innerHeight * 0.55);
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(size, size);
+  camera.aspect = 1;
+  camera.updateProjectionMatrix();
 }
+window.addEventListener('resize', resize);
 
-canvas.addEventListener('pointerdown', e => {
-  dragging = true;
-  startX = e.clientX; startY = e.clientY;
-  startPolar = polar; startAzimuth = azimuth;
-  canvas.classList.add('dragging');
-  canvas.setPointerCapture(e.pointerId);
-});
-canvas.addEventListener('pointermove', e => {
-  if (!dragging) return;
-  azimuth = normalize(startAzimuth + (e.clientX - startX) * DEG_PER_PX);
-  polar = normalize(startPolar - (e.clientY - startY) * DEG_PER_PX);
-  render();
-});
-canvas.addEventListener('pointerup', () => {
-  dragging = false;
-  canvas.classList.remove('dragging');
-});
-canvas.addEventListener('pointercancel', () => {
-  dragging = false;
-  canvas.classList.remove('dragging');
-});
-
+// --- buttons + send ---
 document.querySelectorAll('.buttons button[data-axis]').forEach(b =>
   b.addEventListener('click', () => {
     const d = parseFloat(b.dataset.delta);
     if (b.dataset.axis === 'polar') polar = normalize(polar + d);
     else azimuth = normalize(azimuth + d);
-    render();
+    syncVisuals();
   }));
+
+polarInput.addEventListener('change', () => {
+  const v = parseFloat(polarInput.value);
+  if (Number.isFinite(v)) { polar = normalize(v); syncVisuals(); }
+});
+azInput.addEventListener('change', () => {
+  const v = parseFloat(azInput.value);
+  if (Number.isFinite(v)) { azimuth = normalize(v); syncVisuals(); }
+});
+document.getElementById('zero').addEventListener('click', () => {
+  polar = 0; azimuth = 0;
+  syncVisuals();
+});
 
 document.getElementById('send').addEventListener('click', send);
 
@@ -209,8 +266,14 @@ async function send() {
   }
 }
 
-window.addEventListener('resize', resize);
+function tick() {
+  requestAnimationFrame(tick);
+  controls.update();
+  renderer.render(scene, camera);
+}
 resize();
+syncVisuals();
+tick();
 </script>
 </body>
 </html>

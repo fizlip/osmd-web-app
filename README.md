@@ -4,12 +4,16 @@ A small web app for the Raspberry Pi that lets a user set a rotation angle in
 a browser and relays it to an Arduino over USB serial.
 
 - UI: `index.html` served by `server.py` (Python stdlib HTTP server, no web
-  framework) — a draggable wireframe sphere: vertical drag sets the polar angle,
-  horizontal drag sets the azimuth; a Send button commits both
+  framework) — a real WebGL sphere (Three.js vendored under `libs/`, so no
+  internet needed). Drag on the sphere surface to move the target point;
+  drag on the background to orbit the camera, pinch/scroll to zoom.
+  A Send button commits both angles
 - API: `POST /api/rotate` with `{"polar": 30, "azimuth": -45}` writes
-  `DET_POL_ABS:30\n` then `DET_AZ_ABS:-45\n` to the serial port (either field
-  may be omitted; `angle` is a legacy alias for `polar`). Each reply is read
-  until a line that is exactly `OK`, and the combined text is returned
+  `DET_POL_ABS:30\n` and `DET_AZ_ABS:-45\n` back-to-back so the FreeRTOS
+  firmware moves both motors in parallel (either field may be omitted;
+  `angle` is a legacy alias for `polar`). The reply is read until each
+  command's `<motor> OK` ack (`DET_POL OK`, `DET_AZ OK`) has been seen,
+  and the combined text is returned
 - The serial port is opened once and kept open (opening `/dev/ttyACM0` toggles
   DTR, which resets the Arduino — re-opening per click would reset it every time)
 - Camera: `GET /camera` serves a page showing the Pi Camera via an MJPEG
@@ -34,7 +38,7 @@ Options:
 
 ```
 --port /dev/ttyACM0   serial device (default)
---baud 9600           must match the Arduino's Serial.begin() rate
+--baud 38400          must match the Arduino's Serial.begin() rate
 --http-port 8000      HTTP listen port
 --bind 0.0.0.0        HTTP listen address
 --simulate            run with no hardware; returns fake "OK" replies
@@ -45,8 +49,10 @@ Options:
 - **Baud rate**: `--baud` must equal the `Serial.begin(...)` in the sketch
 - **Line ending**: the server sends the command followed by `\n`. If the sketch
   expects `\r\n`, change `b"\n"` to `b"\r\n"` in `server.py`
-- **End of reply**: the server treats a line containing only `OK` (whitespace
-  around it is fine) as end-of-message, per the firmware protocol
+- **Completion acks**: each command is acknowledged with a `<motor> OK`
+  line (`DET_POL OK`, `DET_AZ OK`); the server waits for every command it
+  sent, in any order. The expected name is derived by stripping `_ABS`
+  from the command head
 
 ## Run it at boot (systemd)
 

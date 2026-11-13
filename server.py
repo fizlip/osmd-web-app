@@ -13,9 +13,10 @@ Serves a single-page UI plus a small JSON API:
                          Either field may be omitted; "angle" is a legacy
                          alias for "polar".
 
-The Arduino's reply is accumulated until a line consisting of "OK" is
-received (blank lines and text before it are tolerated) or the response
-deadline passes.
+Commands are written back-to-back so the FreeRTOS firmware can move the
+motors in parallel; the reply is accumulated until each command's
+"<MOTOR> OK" completion line (e.g. "DET_POL OK") has been seen, in
+whatever order they arrive, or the response deadline passes.
 """
 
 import argparse
@@ -43,12 +44,19 @@ CAM_SIZE = (640, 480)
 CAM_FPS = 10.0
 INDEX_HTML = Path(__file__).with_name("index.html")
 CAMERA_HTML = Path(__file__).with_name("camera.html")
+LIBS_DIR = Path(__file__).with_name("libs")
 
 
 def format_angle(angle: float) -> str:
     if angle == int(angle):
         return str(int(angle))
     return f"{angle:.6f}".rstrip("0").rstrip(".")
+
+
+def expected_ack(command: str) -> str:
+    """Completion line the firmware sends, e.g. DET_POL_ABS:30 -> 'DET_POL OK'."""
+    head = command.split(":", 1)[0]
+    return head.removesuffix("_ABS") + " OK"
 
 
 class SerialManager:
@@ -74,12 +82,18 @@ class SerialManager:
         time.sleep(RESET_DELAY)          # let the Arduino finish rebooting
         self._ser.reset_input_buffer()   # drop bootloader chatter
 
-    def send(self, command: str, timeout: float = RESPONSE_TIMEOUT):
-        """Write command + '\\n', read until an 'OK' line. Returns (ok, text)."""
+    def send(self, commands, timeout: float = RESPONSE_TIMEOUT):
+        """Write all commands back-to-back (FreeRTOS runs the motors in
+        parallel), then read until every command's '<MOTOR> OK' ack has been
+        seen, in whatever order they arrive. Returns (all_acked, text)."""
+        if isinstance(commands, str):
+            commands = [commands]
+        acks = [expected_ack(c) for c in commands]
         with self._lock:
             if self.simulate:
                 time.sleep(0.2)
-                return True, f"SIMULATED: {command}\nOK"
+                lines = [f"SIMULATED: {c}" for c in commands] + acks
+                return True, "\n".join(lines)
             try:
                 self._ensure_open()
             except Exception as exc:
@@ -88,13 +102,15 @@ class SerialManager:
             ser = self._ser
             try:
                 ser.reset_input_buffer()
-                ser.write(command.encode("ascii") + b"\n")
+                for cmd in commands:
+                    ser.write(cmd.encode("ascii") + b"\n")
                 ser.flush()
 
+                pending = set(acks)
                 buf = b""
                 lines = []
                 deadline = time.monotonic() + timeout
-                while time.monotonic() < deadline:
+                while pending and time.monotonic() < deadline:
                     chunk = ser.read(ser.in_waiting or 1)
                     if not chunk:
                         continue
@@ -102,11 +118,13 @@ class SerialManager:
                     while b"\n" in buf:
                         raw, buf = buf.split(b"\n", 1)
                         line = raw.decode("utf-8", "replace").strip()
-                        if line == "OK":
-                            return True, "\n".join([*lines, "OK"])
+                        pending.discard(line)
                         lines.append(line)
-                    if buf.strip() == b"OK":  # OK arrived without newline
-                        return True, "\n".join([*lines, "OK"])
+                    tail = buf.strip()  # final ack may arrive without newline
+                    if tail in pending:
+                        lines.append(tail.decode("utf-8", "replace"))
+                        pending.discard(tail)
+                        buf = b""
             except Exception as exc:
                 self._ser = None  # force reopen next time (e.g. replugged USB)
                 return False, f"serial error: {exc}"
@@ -114,8 +132,11 @@ class SerialManager:
             tail = buf.decode("utf-8", "replace").strip()
             if tail:
                 lines.append(tail)
-            lines.append(f"[timed out after {timeout:.0f}s waiting for OK]")
-            return False, "\n".join(lines)
+            if pending:
+                lines.append(f"[timed out after {timeout:.0f}s waiting for: "
+                             f"{', '.join(sorted(pending))}]")
+                return False, "\n".join(lines)
+            return True, "\n".join(lines)
 
 
 def make_png(w, h, t):
@@ -255,11 +276,28 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # client disconnected
 
+    def _send_lib(self, name: str):
+        if "/" in name or ".." in name or not name.endswith(".js"):
+            self._send_json(404, {"error": "not found"})
+            return
+        f = LIBS_DIR / name
+        if not f.is_file():
+            self._send_json(404, {"error": "not found"})
+            return
+        body = f.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/javascript; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send_html(INDEX_HTML)
         elif self.path == "/camera":
             self._send_html(CAMERA_HTML)
+        elif self.path.startswith("/libs/"):
+            self._send_lib(self.path.removeprefix("/libs/"))
         elif self.path == "/api/stream":
             self._send_stream()
         elif self.path == "/api/health":
@@ -306,19 +344,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "expected 'polar' and/or 'azimuth'"})
             return
 
-        ok_all, parts = True, []
-        for cmd in commands:
-            ok, text = self.manager.send(cmd)
-            ok_all &= ok
-            parts.append(text)
-        self._send_json(200, {"ok": ok_all, "response": "\n".join(parts)})
+        ok, response = self.manager.send(commands)
+        self._send_json(200, {"ok": ok, "response": response})
 
 
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="/dev/ttyACM0", help="serial device")
-    ap.add_argument("--baud", type=int, default=9600,
+    ap.add_argument("--baud", type=int, default=38400,
                     help="must match the Arduino's Serial.begin()")
     ap.add_argument("--bind", default="0.0.0.0", help="HTTP listen address")
     ap.add_argument("--http-port", type=int, default=8000)
