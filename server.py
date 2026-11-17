@@ -189,10 +189,22 @@ class CameraManager:
             raise RuntimeError("picamera2 is not installed")
         if self._picam is None:
             self._picam = Picamera2()
-            self._picam.configure(
-                self._picam.create_video_configuration(main={"size": self.size}))
+            mode = self._full_fov_mode()
+            self._picam.configure(self._picam.create_video_configuration(
+                main={"size": self.size},
+                raw={"size": mode["size"], "format": mode["format"].format}))
             self._picam.start()
         self._ensure_thread(self._capture_loop)
+
+    def _full_fov_mode(self):
+        """Smallest sensor mode that reads the whole sensor (no crop), so the
+        ISP downscales to self.size instead of using a cropped, zoomed mode."""
+        def area(m):
+            return m["crop_limits"][2] * m["crop_limits"][3]
+        modes = self._picam.sensor_modes
+        widest = max(area(m) for m in modes)
+        return min((m for m in modes if area(m) == widest),
+                   key=lambda m: m["size"][0] * m["size"][1])
 
     def _ensure_thread(self, target):
         if self._thread is None or not self._thread.is_alive():
