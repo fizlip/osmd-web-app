@@ -45,12 +45,14 @@ def detect_blobs(frame, threshold=THRESHOLD, min_area=MIN_AREA):
 
 
 def annotate(frame, blobs):
-    """Draw each blob's outline, centroid and (x, y) label onto frame."""
+    """Draw each blob's outline, centroid and (x, y) label onto frame.
+    Labels are relative to the frame centre, so (0, 0) is mid-viewport."""
+    h, w = frame.shape[:2]
     for b in blobs:
         c = (round(b.x), round(b.y))
         cv2.circle(frame, c, max(round(b.radius), 4), (0, 0, 255), 2)
         cv2.drawMarker(frame, c, (0, 0, 255), cv2.MARKER_CROSS, 12, 2)
-        label = f"({b.x:.0f}, {b.y:.0f})"
+        label = f"({b.x - w / 2:.0f}, {b.y - h / 2:.0f})"
         (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 3)
         x = c[0] + round(b.radius) + 6
         if x + tw > frame.shape[1]:  # no room on the right: label on the left

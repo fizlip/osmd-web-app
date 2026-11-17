@@ -22,7 +22,8 @@ a browser and relays it to an Arduino over USB serial.
 - Blob detection: `blob_detector.py` (OpenCV) finds bright, saturated spots
   (e.g. a laser spot's white core; coloured speckle is ignored) in each
   camera frame and draws each one's outline, centroid and `(x, y)` pixel
-  coordinates (origin top-left, 640x480 frame) onto the `/camera` stream.
+  coordinates onto the `/camera` stream. (0, 0) is the centre of the
+  640x480 frame; x grows to the right, y grows downward.
   Without OpenCV installed the stream still works, just without the overlay.
   Tests: `python3 -m unittest test_blob_detector`
 - Designed to extend to 4 motors later: add more fields to the request and
