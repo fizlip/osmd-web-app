@@ -19,6 +19,12 @@ a browser and relays it to an Arduino over USB serial.
 - Camera: `GET /camera` serves a page showing the Pi Camera via an MJPEG
   stream at `GET /api/stream` (uses `picamera2`; in `--simulate` mode it emits
   a generated test pattern)
+- Blob detection: `blob_detector.py` (OpenCV) finds bright, saturated spots
+  (e.g. a laser spot's white core; coloured speckle is ignored) in each
+  camera frame and draws each one's outline, centroid and `(x, y)` pixel
+  coordinates (origin top-left, 640x480 frame) onto the `/camera` stream.
+  Without OpenCV installed the stream still works, just without the overlay.
+  Tests: `python3 -m unittest test_blob_detector`
 - Designed to extend to 4 motors later: add more fields to the request and
   more command strings
 
@@ -28,6 +34,7 @@ a browser and relays it to an Arduino over USB serial.
 sudo apt update
 sudo apt install -y python3-serial        # or: pip install -r requirements.txt
 sudo apt install -y python3-picamera2     # for the /camera page (Pi OS >= Bullseye)
+sudo apt install -y python3-opencv        # blob detection overlay on /camera
 sudo usermod -aG dialout "$USER"          # then log out and back in
 python3 server.py
 ```
@@ -42,6 +49,8 @@ Options:
 --http-port 8000      HTTP listen port
 --bind 0.0.0.0        HTTP listen address
 --simulate            run with no hardware; returns fake "OK" replies
+--blob-threshold 240  grey level (0-255) a pixel must reach to count as saturated
+--blob-min-area 100   ignore bright regions smaller than this many pixels
 ```
 
 ## Things to check on the Arduino side

@@ -5,7 +5,8 @@ Serves a single-page UI plus a small JSON API:
 
     GET  /              -> index.html
     GET  /camera        -> camera.html (live Pi Camera view)
-    GET  /api/stream    -> MJPEG stream (multipart/x-mixed-replace)
+    GET  /api/stream    -> MJPEG stream (multipart/x-mixed-replace) with
+                           detected bright blobs and their (x, y) drawn on
     GET  /api/health    -> {"connected": bool, "camera": bool}
     POST /api/rotate    {"polar": 30, "azimuth": -45}
                          -> writes "DET_POL_ABS:30\n" then "DET_AZ_ABS:-45\n"
@@ -37,6 +38,11 @@ try:
     from picamera2 import Picamera2
 except ImportError:
     Picamera2 = None  # /api/stream still serves simulated frames in --simulate
+
+try:
+    import blob_detector
+except ImportError:
+    blob_detector = None  # no OpenCV/numpy: stream runs without blob overlay
 
 RESPONSE_TIMEOUT = 30.0   # seconds to wait for the terminating "OK"
 RESET_DELAY = 2.0         # opening the port resets the ATmega via DTR
@@ -166,10 +172,12 @@ def make_png(w, h, t):
 class CameraManager:
     """Captures frames in a background thread; stream clients get the latest."""
 
-    def __init__(self, simulate=False, size=CAM_SIZE, fps=CAM_FPS):
+    def __init__(self, simulate=False, size=CAM_SIZE, fps=CAM_FPS,
+                 blob_args=None):
         self.simulate = simulate
         self.size = size
         self.interval = 1.0 / fps
+        self.blob_args = blob_args or {}  # detect_blobs() keyword overrides
         self._picam = None
         self._frame = None   # (data, mime)
         self._seq = 0
@@ -190,8 +198,9 @@ class CameraManager:
         if self._picam is None:
             self._picam = Picamera2()
             mode = self._full_fov_mode()
+            # RGB888 arrays come out in B, G, R order, as OpenCV expects
             self._picam.configure(self._picam.create_video_configuration(
-                main={"size": self.size},
+                main={"size": self.size, "format": "RGB888"},
                 raw={"size": mode["size"], "format": mode["format"].format}))
             self._picam.start()
             if "AfMode" in self._picam.camera_controls:
@@ -220,19 +229,32 @@ class CameraManager:
         buf = io.BytesIO()
         while True:
             try:
-                buf.seek(0)
-                buf.truncate(0)
-                self._picam.capture_file(buf, format="jpeg")
+                if blob_detector is None:
+                    buf.seek(0)
+                    buf.truncate(0)
+                    self._picam.capture_file(buf, format="jpeg")
+                    data = buf.getvalue()
+                else:
+                    data = self._detect(self._picam.capture_array("main"))
             except Exception:
                 time.sleep(1)
                 continue
-            self._publish(buf.getvalue(), "image/jpeg")
+            self._publish(data, "image/jpeg")
             time.sleep(self.interval)
 
     def _simulate_loop(self):
         while True:
-            self._publish(make_png(320, 240, time.monotonic()), "image/png")
+            t = time.monotonic()
+            if blob_detector is None:
+                self._publish(make_png(320, 240, t), "image/png")
+            else:
+                frame = blob_detector.synthetic_frame(*self.size, t)
+                self._publish(self._detect(frame), "image/jpeg")
             time.sleep(0.4)
+
+    def _detect(self, frame):
+        """JPEG of frame with each blob and its (x, y) drawn on it."""
+        return blob_detector.process(frame, **self.blob_args)[0]
 
     def _publish(self, data, mime):
         with self._cond:
@@ -375,6 +397,10 @@ def main():
     ap.add_argument("--http-port", type=int, default=8000)
     ap.add_argument("--simulate", action="store_true",
                     help="run without serial hardware; returns fake OK replies")
+    ap.add_argument("--blob-threshold", type=int,
+                    help="grey level 0-255 counted as saturated (default 240)")
+    ap.add_argument("--blob-min-area", type=int,
+                    help="smallest blob in pixels (default 100)")
     args = ap.parse_args()
 
     mgr = SerialManager(args.port, args.baud, args.simulate)
@@ -387,9 +413,14 @@ def main():
         except Exception as exc:
             print(f"warning: {exc} (will retry on the first command)")
 
-    cam = CameraManager(simulate=args.simulate)
+    blob_args = {"threshold": args.blob_threshold,
+                 "min_area": args.blob_min_area}
+    cam = CameraManager(simulate=args.simulate, blob_args={
+        k: v for k, v in blob_args.items() if v is not None})
     if not args.simulate and Picamera2 is None:
         print("warning: picamera2 not installed; /camera will return 503")
+    if blob_detector is None:
+        print("warning: OpenCV/numpy not installed; no blob detection")
 
     Handler.manager = mgr
     Handler.camera = cam
