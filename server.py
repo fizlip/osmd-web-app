@@ -194,6 +194,11 @@ class CameraManager:
                 main={"size": self.size},
                 raw={"size": mode["size"], "format": mode["format"].format}))
             self._picam.start()
+            if "AfMode" in self._picam.camera_controls:
+                from libcamera import controls
+                self._picam.set_controls({
+                    "AfMode": controls.AfModeEnum.Continuous,
+                    "AfRange": controls.AfRangeEnum.Full})
         self._ensure_thread(self._capture_loop)
 
     def _full_fov_mode(self):
