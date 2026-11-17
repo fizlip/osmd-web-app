@@ -53,12 +53,14 @@
   <input class="angle" id="polarInput" type="number" step="any" value="0">
   <button data-axis="polar" data-delta="-45">-45&deg;</button>
   <button data-axis="polar" data-delta="45">+45&deg;</button>
+  <button class="sweep" data-axis="polar">Sweep</button>
 </div>
 <div class="buttons">
   <span class="lbl">azimuth</span>
   <input class="angle" id="azInput" type="number" step="any" value="0">
   <button data-axis="azimuth" data-delta="-45">-45&deg;</button>
   <button data-axis="azimuth" data-delta="45">+45&deg;</button>
+  <button class="sweep" data-axis="azimuth">Sweep</button>
 </div>
 <div class="buttons">
   <button id="send">Send</button>
@@ -103,18 +105,24 @@ function pt(el, az) {
   return new THREE.Vector3(c * Math.sin(a), Math.sin(e), c * Math.cos(a));
 }
 
-// opaque white sphere slightly inside the grid: hides back-side lines
+// translucent white sphere at 50%: back lines show through the tint
 const sphereGeo = new THREE.SphereGeometry(0.995, 48, 32);
 const occluder = new THREE.Mesh(
   sphereGeo,
-  new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.6,
+  }));
+occluder.renderOrder = 2;  // blend first so the rim can test against its depth
 scene.add(occluder);
 
 // black rim: a hair larger sphere showing only its back faces -> silhouette edge
 const outline = new THREE.Mesh(
   sphereGeo,
-  new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide }));
+  new THREE.MeshBasicMaterial({
+    color: 0x000000, side: THREE.BackSide, transparent: true,
+  }));
 outline.scale.setScalar(1.003);
+outline.renderOrder = 3;   // after occluder: interior fails its depth test
 scene.add(outline);
 
 // reference circles: equator (azimuthal) and a pole-to-pole meridian (polar)
@@ -168,11 +176,25 @@ zeroMark.rotation.y = Math.PI / 2;  // tangent to the surface at +x
 scene.add(zeroMark);
 
 // marker: a small block, always drawn on top so the target stays visible
+const MARKER_COLOR = 0x4172ff;
 const marker = new THREE.Mesh(
   new THREE.BoxGeometry(0.09, 0.09, 0.09),
-  new THREE.MeshBasicMaterial({ color: 0x4172ff, depthTest: false }));
+  new THREE.MeshBasicMaterial({
+    color: MARKER_COLOR, depthTest: false, transparent: true,
+  }));
 marker.renderOrder = 10;
 scene.add(marker);
+
+// line sticking out of the marker along the surface normal
+const normalGeo = new THREE.BufferGeometry().setFromPoints(
+  [new THREE.Vector3(), new THREE.Vector3()]);
+const normalLine = new THREE.Line(
+  normalGeo,
+  new THREE.LineBasicMaterial({
+    color: MARKER_COLOR, depthTest: false, transparent: true,
+  }));
+normalLine.renderOrder = 9;
+scene.add(normalLine);
 
 const UP = new THREE.Vector3(0, 1, 0);
 function syncVisuals() {
@@ -188,6 +210,10 @@ function syncVisuals() {
     marker.quaternion.setFromRotationMatrix(
       new THREE.Matrix4().makeBasis(azTan, n, z));
   }
+  const np = normalGeo.attributes.position;
+  np.setXYZ(0, n.x * 1.06, n.y * 1.06, n.z * 1.06);
+  np.setXYZ(1, 0, 0, 0);  // inward, to the sphere center
+  np.needsUpdate = true;
   readout.textContent = `polar ${Math.round(polar)}°   azimuth ${Math.round(azimuth)}°`;
   if (document.activeElement !== polarInput) polarInput.value = +polar.toFixed(1);
   if (document.activeElement !== azInput) azInput.value = +azimuth.toFixed(1);
@@ -213,15 +239,20 @@ function pickOrLimb(e) {
   if (p) return p;
   const ray = raycaster.ray;
   const t = -ray.origin.dot(ray.direction);   // closest approach to center
-  return ray.origin.clone()
-    .addScaledVector(ray.direction, Math.max(t, 0))
-    .setLength(1);
+  const c = ray.origin.clone()
+    .addScaledVector(ray.direction, Math.max(t, 0));
+  return c.lengthSq() > 1e-12 ? c.setLength(1) : null;
 }
 
 function setFromPoint(p) {
+  if (!p || !Number.isFinite(p.x + p.y + p.z)) return;
   const v = p.clone().normalize();
-  polar = Math.asin(THREE.MathUtils.clamp(v.y, -1, 1)) * 180 / Math.PI;
-  azimuth = normalize(Math.atan2(v.x, v.z) * 180 / Math.PI - 90);
+  if (!Number.isFinite(v.x + v.y + v.z)) return;
+  const newPolar = Math.asin(THREE.MathUtils.clamp(v.y, -1, 1)) * 180 / Math.PI;
+  const newAzimuth = normalize(Math.atan2(v.x, v.z) * 180 / Math.PI - 90);
+  if (!Number.isFinite(newPolar) || !Number.isFinite(newAzimuth)) return;
+  polar = newPolar;
+  azimuth = newAzimuth;
   syncVisuals();
 }
 
@@ -265,7 +296,7 @@ function resize() {
 window.addEventListener('resize', resize);
 
 // --- buttons + send ---
-document.querySelectorAll('.buttons button[data-axis]').forEach(b =>
+document.querySelectorAll('.buttons button[data-delta]').forEach(b =>
   b.addEventListener('click', () => {
     const d = parseFloat(b.dataset.delta);
     if (b.dataset.axis === 'polar') polar = normalize(polar + d);
@@ -286,27 +317,82 @@ document.getElementById('zero').addEventListener('click', () => {
   syncVisuals();
 });
 
-document.getElementById('send').addEventListener('click', send);
+document.getElementById('send').addEventListener('click', () => {
+  if (!sweeping()) send({ polar, azimuth });
+});
 
-async function send() {
-  statusEl.textContent = 'sending…';
+// --- sweeps: send one end angle, wait for its OK, send the other, repeat ---
+// only one axis sweeps at a time; starting another stops the current one
+const SWEEP_ENDS = { polar: [80, -80], azimuth: [0, -175] };
+let activeSweep = null, sweepRun = 0, sending = false;
+const sweeping = () => activeSweep !== null;
+
+const sweepBtns = {};
+document.querySelectorAll('.sweep').forEach(b => {
+  sweepBtns[b.dataset.axis] = b;
+  b.addEventListener('click', () => {
+    const axis = b.dataset.axis;
+    setSweep(activeSweep === axis ? null : axis);
+    if (activeSweep === axis) sweepLoop(axis);
+  });
+});
+
+function setSweep(axis) {
+  activeSweep = axis;
+  sweepRun++;  // any older loop sees a stale run id and exits
+  for (const [a, btn] of Object.entries(sweepBtns))
+    btn.textContent = a === axis ? 'Stop' : 'Sweep';
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function sweepLoop(axis) {
+  const ends = SWEEP_ENDS[axis], run = sweepRun;
+  for (let i = 0; run === sweepRun; i = (i + 1) % ends.length) {
+    while (sending) await sleep(50);  // let a previous sweep's move finish
+    if (run !== sweepRun) break;
+    if (axis === 'polar') polar = ends[i]; else azimuth = ends[i];
+    syncVisuals();
+    if (!(await send({ [axis]: ends[i] })) && run === sweepRun)
+      setSweep(null);  // stop on error / timeout
+  }
+}
+
+const fmtAngle = a => Number.isInteger(a) ? String(a) : String(+a.toFixed(6));
+const CMD = { polar: 'DET_POL_ABS', azimuth: 'DET_AZ_ABS' };
+
+// body: subset of {polar, azimuth}; resolves true once every ack came back OK
+async function send(body) {
+  if (sending) return false;
+  if (!Object.values(body).every(Number.isFinite)) {
+    statusEl.textContent = 'invalid angle';
+    statusEl.className = 'err';
+    return false;
+  }
+  sending = true;
+  statusEl.textContent = 'Sending: ' + Object.entries(body)
+    .map(([k, v]) => `${CMD[k]}:${fmtAngle(v)}`).join('  ');
   statusEl.className = '';
   try {
     const r = await fetch('/api/rotate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ polar, azimuth }),
+      body: JSON.stringify(body),
     });
     const j = await r.json();
     if (j.error || !j.ok) {
       statusEl.textContent = j.error || j.response || 'failed';
       statusEl.className = 'err';
-    } else {
-      statusEl.textContent = 'OK';
+      return false;
     }
+    statusEl.textContent = 'OK';
+    return true;
   } catch {
     statusEl.textContent = 'server unreachable';
     statusEl.className = 'err';
+    return false;
+  } finally {
+    sending = false;
   }
 }
 
