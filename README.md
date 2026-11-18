@@ -19,10 +19,15 @@ a browser and relays it to an Arduino over USB serial.
 - Camera: `GET /camera` serves a page showing the Pi Camera via an MJPEG
   stream at `GET /api/stream` (uses `picamera2`; in `--simulate` mode it emits
   a generated test pattern)
-- Blob detection: `blob_detector.py` (OpenCV) finds bright, saturated spots
-  (e.g. a laser spot's white core; coloured speckle is ignored) in each
-  camera frame and draws each one's outline, centroid and `(x, y)` pixel
-  coordinates onto the `/camera` stream. (0, 0) is the centre of the
+- Blob detection: `blob_detector.py` (OpenCV) finds saturated spots
+  (e.g. a laser spot's white core; coloured speckle is ignored) and draws
+  each one's outline, centroid and `(x, y)` pixel coordinates onto the
+  `/camera` stream. Detection runs on the camera's raw 10-bit sensor data
+  (0-1023, before the ISP's tone curve and 8-bit conversion): a 2x2 Bayer
+  cell counts as saturated when all four of its R, G, G, B samples reach
+  the threshold. Positions are mapped into the stream's image, which is a
+  scaled (and, for a wide sensor, centre-cropped) view of the sensor.
+  Works on both Pi 4 and Pi 5 raw formats. (0, 0) is the centre of the
   640x480 frame; x grows to the right, y grows downward.
   Without OpenCV installed the stream still works, just without the overlay.
   Tests: `python3 -m unittest test_blob_detector`
@@ -50,8 +55,9 @@ Options:
 --http-port 8000      HTTP listen port
 --bind 0.0.0.0        HTTP listen address
 --simulate            run with no hardware; returns fake "OK" replies
---blob-threshold 240  grey level (0-255) a pixel must reach to count as saturated
---blob-min-area 100   ignore bright regions smaller than this many pixels
+--blob-threshold 1000 raw sensor level (0-1023 at 10 bits) all four samples
+                      of a Bayer cell must reach to count as saturated
+--blob-min-area 100   ignore bright regions smaller than this many stream pixels
 ```
 
 ## Things to check on the Arduino side

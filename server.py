@@ -24,6 +24,7 @@ import argparse
 import io
 import json
 import math
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,6 +41,7 @@ except ImportError:
     Picamera2 = None  # /api/stream still serves simulated frames in --simulate
 
 try:
+    import numpy as np
     import blob_detector
 except ImportError:
     blob_detector = None  # no OpenCV/numpy: stream runs without blob overlay
@@ -198,10 +200,18 @@ class CameraManager:
         if self._picam is None:
             self._picam = Picamera2()
             mode = self._full_fov_mode()
-            # RGB888 arrays come out in B, G, R order, as OpenCV expects
+            # RGB888 arrays come out in B, G, R order, as OpenCV expects;
+            # the unpacked raw format gives one 16-bit word per sensor sample
             self._picam.configure(self._picam.create_video_configuration(
                 main={"size": self.size, "format": "RGB888"},
-                raw={"size": mode["size"], "format": mode["format"].format}))
+                raw={"size": mode["size"], "format": mode["unpacked"]}))
+            self._crop_limits = mode["crop_limits"]
+            cfg = self._picam.camera_configuration()
+            self._raw_width = cfg["raw"]["size"][0]
+            # Pi 4 right-aligns e.g. 10-bit samples (0-1023); Pi 5 left-shifts
+            # them to fill 16 bits ("SRGGB16"). Shift back to sensor levels.
+            container = int(re.search(r"\d+$", cfg["raw"]["format"]).group())
+            self._raw_shift = container - cfg["sensor"]["bit_depth"]
             self._picam.start()
             if "AfMode" in self._picam.camera_controls:
                 from libcamera import controls
@@ -235,7 +245,7 @@ class CameraManager:
                     self._picam.capture_file(buf, format="jpeg")
                     data = buf.getvalue()
                 else:
-                    data = self._detect(self._picam.capture_array("main"))
+                    data = self._capture_and_detect()
             except Exception:
                 time.sleep(1)
                 continue
@@ -248,13 +258,27 @@ class CameraManager:
             if blob_detector is None:
                 self._publish(make_png(320, 240, t), "image/png")
             else:
-                frame = blob_detector.synthetic_frame(*self.size, t)
-                self._publish(self._detect(frame), "image/jpeg")
+                capture = blob_detector.synthetic_capture(self.size, t)
+                self._publish(self._detect(*capture), "image/jpeg")
             time.sleep(0.4)
 
-    def _detect(self, frame):
+    def _capture_and_detect(self):
+        """Grab the preview and raw frames of one request, so the blobs found
+        in the raw data line up with the image they are drawn on."""
+        request = self._picam.capture_request()
+        try:
+            frame = request.make_array("main")
+            raw = request.make_array("raw").view(np.uint16)
+            scaler_crop = request.get_metadata()["ScalerCrop"]
+        finally:
+            request.release()
+        bayer = raw[:, :self._raw_width] >> self._raw_shift  # drop row padding
+        return self._detect(frame, bayer, self._crop_limits, scaler_crop)
+
+    def _detect(self, frame, bayer, crop_limits, scaler_crop):
         """JPEG of frame with each blob and its (x, y) drawn on it."""
-        return blob_detector.process(frame, **self.blob_args)[0]
+        return blob_detector.process(frame, bayer, crop_limits, scaler_crop,
+                                     **self.blob_args)[0]
 
     def _publish(self, data, mime):
         with self._cond:
@@ -398,7 +422,8 @@ def main():
     ap.add_argument("--simulate", action="store_true",
                     help="run without serial hardware; returns fake OK replies")
     ap.add_argument("--blob-threshold", type=int,
-                    help="grey level 0-255 counted as saturated (default 240)")
+                    help="raw sensor level (0-1023 at 10 bits) all four "
+                         "samples of a Bayer cell must reach (default 1000)")
     ap.add_argument("--blob-min-area", type=int,
                     help="smallest blob in pixels (default 100)")
     args = ap.parse_args()

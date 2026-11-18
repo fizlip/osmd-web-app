@@ -1,10 +1,13 @@
-"""Bright-spot ("blob") detection for camera frames.
+"""Bright-spot ("blob") detection on the camera's raw 10-bit sensor data.
 
-A blob is a connected region of saturated, near-white pixels, e.g. the core
-of a laser spot. Coloured speckle around it is ignored because only pixels
-whose grey level reaches the threshold count, and specks smaller than
-min_area are dropped. Frames are numpy BGR arrays (OpenCV's layout, and what
-Picamera2 returns for the "RGB888" format).
+A blob is a connected region of saturated pixels, e.g. the white core of a
+laser spot. Detection runs on the raw Bayer frame (one colour sample per
+pixel, 0-1023 for a 10-bit sensor), before the ISP's tone curve and 8-bit
+conversion, so "saturated" means the sensor itself clipped. A 2x2 Bayer cell
+(R, G, G, B) counts only when all four samples reach the threshold, so
+green-only speckle is ignored even where the green sites clip. Blob
+coordinates are mapped into the processed preview frame (BGR, what
+Picamera2 returns for "RGB888") so they can be drawn on the stream.
 """
 
 from dataclasses import dataclass
@@ -12,16 +15,16 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-THRESHOLD = 240   # grey level (0-255) a pixel must reach to be "saturated"
-MIN_AREA = 100    # pixels; smaller bright regions are treated as glints
+THRESHOLD = 1000  # raw level (0-1023 at 10 bits) all 4 samples of a cell must reach
+MIN_AREA = 100    # preview-frame pixels; smaller bright regions are glints
 
 
 @dataclass
 class Blob:
-    x: float        # centroid, pixels from the left edge
-    y: float        # centroid, pixels from the top edge
-    area: int       # pixels
-    bbox: tuple     # (left, top, width, height)
+    x: float        # centroid, preview-frame pixels from the left edge
+    y: float        # centroid, preview-frame pixels from the top edge
+    area: int       # preview-frame pixels
+    bbox: tuple     # (left, top, width, height), preview-frame pixels
 
     @property
     def radius(self) -> float:
@@ -29,18 +32,47 @@ class Blob:
         return float(np.sqrt(self.area / np.pi))
 
 
-def detect_blobs(frame, threshold=THRESHOLD, min_area=MIN_AREA):
-    """Return the bright blobs in a BGR frame, largest first."""
-    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(grey, threshold - 1, 255, cv2.THRESH_BINARY)
+def raw_to_frame(raw_size, crop_limits, scaler_crop, frame_size):
+    """Affine map from raw pixel coordinates to preview frame coordinates.
+
+    crop_limits is the sensor area the raw mode reads out and scaler_crop the
+    sensor area the ISP scaled into the frame, both (x, y, w, h) in
+    full-sensor pixels. -> ((kx, ky), (ox, oy)) with frame = raw * k + o
+    """
+    k, o = [], []
+    for i in (0, 1):
+        to_sensor = crop_limits[2 + i] / raw_size[i]
+        to_frame = frame_size[i] / scaler_crop[2 + i]
+        k.append(to_sensor * to_frame)
+        # pixel centres sit half a pixel in from the edge in both grids
+        o.append((crop_limits[i] + 0.5 * to_sensor - scaler_crop[i])
+                 * to_frame - 0.5)
+    return tuple(k), tuple(o)
+
+
+def detect_blobs(bayer, threshold=THRESHOLD, min_area=MIN_AREA,
+                 scale=(1.0, 1.0), offset=(0.0, 0.0)):
+    """Return the saturated blobs in a raw Bayer frame (uint16 sensor
+    levels), largest first, mapped to the frame by raw * scale + offset."""
+    h, w = bayer.shape[0] // 2 * 2, bayer.shape[1] // 2 * 2
+    cells = bayer[:h, :w].reshape(h // 2, 2, w // 2, 2).min(axis=(1, 3))
+    mask = np.where(cells >= threshold, 255, 0).astype(np.uint8)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)   # drop specks
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # fill pinholes
     n, _, stats, centroids = cv2.connectedComponentsWithStats(mask)
-    blobs = [Blob(float(cx), float(cy), int(s[cv2.CC_STAT_AREA]),
-                  tuple(int(v) for v in s[:4]))
-             for s, (cx, cy) in zip(stats[1:n], centroids[1:n])
-             if s[cv2.CC_STAT_AREA] >= min_area]
+    # cell c spans raw pixels 2c and 2c+1, so its centre is raw 2c + 0.5
+    kx, ky = 2 * scale[0], 2 * scale[1]
+    ox, oy = offset[0] + 0.5 * scale[0], offset[1] + 0.5 * scale[1]
+    blobs = []
+    for (left, top, bw, bh, cells_area), (cx, cy) in zip(stats[1:n],
+                                                          centroids[1:n]):
+        area = cells_area * kx * ky
+        if area >= min_area:
+            blobs.append(Blob(float(cx * kx + ox), float(cy * ky + oy),
+                              round(area),
+                              (round(left * kx + ox), round(top * ky + oy),
+                               round(bw * kx), round(bh * ky))))
     return sorted(blobs, key=lambda b: b.area, reverse=True)
 
 
@@ -65,21 +97,37 @@ def annotate(frame, blobs):
     return frame
 
 
-def process(frame, threshold=THRESHOLD, min_area=MIN_AREA):
-    """Detect blobs, draw them, and JPEG-encode. -> (jpeg_bytes, blobs)"""
-    blobs = detect_blobs(frame, threshold, min_area)
+def process(frame, bayer, crop_limits, scaler_crop,
+            threshold=THRESHOLD, min_area=MIN_AREA):
+    """Detect blobs in bayer, draw them on frame, and JPEG-encode the frame.
+    -> (jpeg_bytes, blobs)"""
+    scale, offset = raw_to_frame(bayer.shape[::-1], crop_limits, scaler_crop,
+                                 frame.shape[1::-1])
+    blobs = detect_blobs(bayer, threshold, min_area, scale, offset)
     ok, jpeg = cv2.imencode(".jpg", annotate(frame, blobs))
     if not ok:
         raise RuntimeError("JPEG encoding failed")
     return jpeg.tobytes(), blobs
 
 
-def synthetic_frame(w, h, t):
-    """Test frame for --simulate: a white spot circling over green speckle."""
+def synthetic_capture(frame_size, t):
+    """--simulate stand-in for one camera request: a saturated spot circling
+    over clipping green speckle on a 16:9 10-bit RGGB sensor, previewed as a
+    centred crop scaled to frame_size.
+    -> (frame, bayer, crop_limits, scaler_crop)"""
+    rw, rh = 1536, 864
     rng = np.random.default_rng(int(t * 10))
-    frame = np.zeros((h, w, 3), np.uint8)
-    frame[..., 1] = rng.integers(0, 200, (h, w), dtype=np.uint8)
-    cx = int(w / 2 + w / 4 * np.cos(t * 0.5))
-    cy = int(h / 2 + h / 4 * np.sin(t * 0.5))
-    cv2.circle(frame, (cx, cy), min(w, h) // 12, (255, 255, 255), -1)
-    return frame
+    bayer = rng.integers(0, 64, (rh, rw), dtype=np.uint16)
+    for green in (bayer[0::2, 1::2], bayer[1::2, 0::2]):
+        green[:] = rng.integers(0, 1024, green.shape, dtype=np.uint16)
+    cx = int(rw / 2 + rh / 3 * np.cos(t * 0.5))
+    cy = int(rh / 2 + rh / 4 * np.sin(t * 0.5))
+    cv2.circle(bayer, (cx, cy), rh // 14, 1023, -1)
+    cw = rh * frame_size[0] // frame_size[1]
+    crop_limits, scaler_crop = (0, 0, rw, rh), ((rw - cw) // 2, 0, cw, rh)
+    # OpenCV names RGGB by the 2nd row's pattern: "BayerBG"
+    rgb = cv2.cvtColor((bayer >> 2).astype(np.uint8), cv2.COLOR_BayerBG2BGR)
+    x = scaler_crop[0]
+    frame = cv2.resize(rgb[:, x:x + cw], frame_size,
+                       interpolation=cv2.INTER_AREA)
+    return frame, bayer, crop_limits, scaler_crop
