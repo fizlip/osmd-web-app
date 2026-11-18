@@ -110,11 +110,15 @@
   const hctx = hist.getContext('2d');
 
   function drawHist(d) {
-    const W = hist.width, H = hist.height;
+    const W = hist.width, H = hist.height, AXIS = 16;  // bottom strip for ticks
     hctx.clearRect(0, 0, W, H);
     hctx.fillStyle = '#888';
     hctx.font = '10px system-ui';
+    const n = d.r.length, clip = n - 1;
     hctx.fillText(`raw ${d.pattern}, ${d.bit_depth}-bit (log counts)`, 4, 10);
+    hctx.fillStyle = '#d00';
+    hctx.fillText(`clip ${clip}:  r=${d.r[clip]}  g=${d.g[clip]}  b=${d.b[clip]}`,
+                  W - 200, 10);
     const max = Math.log10(1 + Math.max(...d.r, ...d.g, ...d.b));
     for (const [key, color] of [['r', '#d00'], ['g', '#0a0'], ['b', '#00d']]) {
       const v = d[key];
@@ -122,11 +126,28 @@
       hctx.beginPath();
       v.forEach((c, i) => {
         const x = i / (v.length - 1) * W;
-        const y = H - 2 - (c ? Math.log10(1 + c) / max * (H - 16) : 0);
+        const y = H - AXIS - (c ? Math.log10(1 + c) / max * (H - AXIS - 16) : 0);
         i ? hctx.lineTo(x, y) : hctx.moveTo(x, y);
       });
       hctx.stroke();
     }
+    // x axis: tick + label every quarter of the bin range
+    hctx.strokeStyle = '#ccc'; hctx.fillStyle = '#888';
+    hctx.beginPath();
+    for (let t = 0; t <= 4; t++) {
+      const bin = Math.round(t * clip / 4);
+      const x = bin / clip * W;
+      hctx.moveTo(x, H - AXIS); hctx.lineTo(x, H - AXIS + 3);
+      hctx.fillText(bin, Math.min(x + 2, W - 24), H - 4);
+    }
+    hctx.stroke();
+    // dashed guide at the clip bin
+    hctx.strokeStyle = '#ccc';
+    hctx.setLineDash([3, 3]);
+    hctx.beginPath();
+    hctx.moveTo(W - 1, 12); hctx.lineTo(W - 1, H - AXIS);
+    hctx.stroke();
+    hctx.setLineDash([]);
   }
 
   function pollHist() {
