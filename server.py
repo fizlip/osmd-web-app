@@ -210,8 +210,9 @@ class CameraManager:
             self._raw_width = cfg["raw"]["size"][0]
             # Pi 4 right-aligns e.g. 10-bit samples (0-1023); Pi 5 left-shifts
             # them to fill 16 bits ("SRGGB16"). Shift back to sensor levels.
+            # (older picamera2 lacks cfg["sensor"]; the mode knows it too)
             container = int(re.search(r"\d+$", cfg["raw"]["format"]).group())
-            self._raw_shift = container - cfg["sensor"]["bit_depth"]
+            self._raw_shift = container - mode["bit_depth"]
             self._picam.start()
             if "AfMode" in self._picam.camera_controls:
                 from libcamera import controls
