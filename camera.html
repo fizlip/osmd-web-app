@@ -15,17 +15,93 @@
   img { max-width: 100%; max-height: 75vh; background: #eee; }
   a, #status { font-size: .85rem; color: #888; text-decoration: none; }
   #status { min-height: 1.2em; }
+  #controls {
+    display: flex; flex-direction: column; gap: .4rem;
+    font-size: .85rem; color: #444;
+  }
+  #controls label { display: flex; align-items: center; gap: .6rem; }
+  #controls input[type="range"] { width: 12rem; }
+  #controls .val { width: 5.5rem; font-variant-numeric: tabular-nums; }
+  #controls .hidden { display: none; }
+  #controls.disabled input[type="range"] { opacity: .35; }
 </style>
 </head>
 <body>
 
 <img id="cam" src="/api/stream" alt="live camera feed">
 <div id="status"></div>
+
+<div id="controls">
+  <label>
+    <input id="ae" type="checkbox" checked> auto exposure
+  </label>
+  <label>
+    exposure
+    <input id="exp" type="range" min="0" max="100" value="50">
+    <span class="val" id="expVal"></span>
+  </label>
+  <label>
+    gain
+    <input id="gain" type="range" min="1" max="16" step="0.1" value="1">
+    <span class="val" id="gainVal"></span>
+  </label>
+</div>
+
 <a href="/">&larr; controls</a>
 
 <script>
   document.getElementById('cam').addEventListener('error', () =>
     document.getElementById('status').textContent = 'camera stream unavailable');
+
+  const ae = document.getElementById('ae');
+  const exp = document.getElementById('exp');
+  const gain = document.getElementById('gain');
+  const expVal = document.getElementById('expVal');
+  const gainVal = document.getElementById('gainVal');
+  const controls = document.getElementById('controls');
+
+  // log scale: slider 0..100 -> 100us .. 100ms
+  const expUs = () => Math.round(100 * Math.pow(1000, exp.value / 100));
+  const expUsFrom = us =>
+    Math.round(Math.log10(us / 100) / 3 * 100);
+
+  function fmtExp(us) {
+    return us < 1000 ? us + ' \u00b5s' : (us / 1000).toFixed(2) + ' ms';
+  }
+
+  function showValues() {
+    expVal.textContent = fmtExp(expUs());
+    gainVal.textContent = 'x' + Number(gain.value).toFixed(1);
+    controls.classList.toggle('disabled', ae.checked);
+    exp.disabled = gain.disabled = ae.checked;
+  }
+
+  async function send() {
+    try {
+      await fetch('/api/camera-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ae.checked
+          ? { ae: true }
+          : { ae: false, exposure_us: expUs(), gain: Number(gain.value) }),
+      });
+    } catch { /* ignore: slider drags are best-effort */ }
+  }
+
+  ae.addEventListener('change', () => { showValues(); send(); });
+  exp.addEventListener('input', showValues);
+  exp.addEventListener('change', send);
+  gain.addEventListener('input', showValues);
+  gain.addEventListener('change', send);
+
+  fetch('/api/camera-settings').then(r => r.json()).then(s => {
+    if (s.error) { controls.classList.add('hidden'); return; }
+    ae.checked = s.ae !== false;
+    if (s.exposure_us) exp.value = expUsFrom(s.exposure_us);
+    if (s.gain) gain.value = s.gain;
+    showValues();
+  }).catch(() => {});
+  showValues();
 </script>
 </body>
 </html>

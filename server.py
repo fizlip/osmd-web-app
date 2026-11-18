@@ -185,10 +185,31 @@ class CameraManager:
         self._seq = 0
         self._cond = threading.Condition()
         self._thread = None
+        self._ctrl = {"exposure_us": None, "gain": None, "ae": True}
 
     @property
     def available(self):
         return self.simulate or self._picam is not None
+
+    def camera_settings(self):
+        """Current exposure controls, e.g. for the /camera page sliders."""
+        return dict(self._ctrl)
+
+    def set_camera_settings(self, settings):
+        """Update exposure controls; remembered for when the camera opens.
+        Keys: ae (bool), exposure_us (int), gain (float)."""
+        self._ctrl.update(settings)
+        if self._picam is None:
+            return
+        if self._ctrl["ae"]:
+            self._picam.set_controls({"AeEnable": True})
+            return
+        controls = {"AeEnable": False}
+        if self._ctrl["exposure_us"] is not None:
+            controls["ExposureTime"] = self._ctrl["exposure_us"]
+        if self._ctrl["gain"] is not None:
+            controls["AnalogueGain"] = self._ctrl["gain"]
+        self._picam.set_controls(controls)
 
     def start(self):
         """Begin capturing. Raises if no camera can be opened."""
@@ -214,6 +235,7 @@ class CameraManager:
             container = int(re.search(r"\d+$", cfg["raw"]["format"]).group())
             self._raw_shift = container - mode["bit_depth"]
             self._picam.start()
+            self.set_camera_settings({})  # apply any controls set pre-start
             if "AfMode" in self._picam.camera_controls:
                 from libcamera import controls
                 self._picam.set_controls({
@@ -367,19 +389,61 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/health":
             self._send_json(200, {"connected": self.manager.connected,
                                   "camera": self.camera.available})
+        elif self.path == "/api/camera-settings":
+            s = self.camera.camera_settings()
+            s["available"] = self.camera.available
+            self._send_json(200, s)
         else:
             self._send_json(404, {"error": "not found"})
 
-    def do_POST(self):
-        if self.path != "/api/rotate":
-            self._send_json(404, {"error": "not found"})
-            return
+    def _read_json(self):
         try:
             length = int(self.headers.get("Content-Length", 0))
-            data = json.loads(self.rfile.read(length) or b"{}")
+            return json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             self._send_json(400, {"error": "body must be JSON"})
+            return None
+
+    def _camera_settings(self, data):
+        try:
+            settings = {}
+            if "ae" in data:
+                settings["ae"] = bool(data["ae"])
+            if "exposure_us" in data:
+                v = data["exposure_us"]
+                if isinstance(v, bool) or not (0 < float(v) <= 1e6):
+                    raise ValueError("exposure_us")
+                settings["exposure_us"] = int(v)
+            if "gain" in data:
+                v = data["gain"]
+                if isinstance(v, bool) or not (0 < float(v) <= 128):
+                    raise ValueError("gain")
+                settings["gain"] = float(v)
+        except (ValueError, TypeError):
+            self._send_json(400, {"error": "settings must be numbers in range"})
             return
+        if not settings:
+            self._send_json(400, {"error": "expected 'ae', 'exposure_us' "
+                                          "and/or 'gain'"})
+            return
+        if not self.camera.available:
+            self._send_json(503, {"error": "camera unavailable"})
+            return
+        self.camera.set_camera_settings(settings)
+        self._send_json(200, {"ok": True})
+
+    def do_POST(self):
+        data = self._read_json()
+        if data is None:
+            return
+        if self.path == "/api/camera-settings":
+            self._camera_settings(data)
+        elif self.path == "/api/rotate":
+            self._rotate(data)
+        else:
+            self._send_json(404, {"error": "not found"})
+
+    def _rotate(self, data):
 
         def angle_of(key):
             v = data.get(key)
