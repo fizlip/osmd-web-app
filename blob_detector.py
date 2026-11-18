@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 THRESHOLD = 900  # raw level (0-1023 at 10 bits) all 4 samples of a cell must reach
-MIN_AREA = 100    # preview-frame pixels; smaller bright regions are glints
+MIN_AREA = 80    # preview-frame pixels; smaller bright regions are glints
 
 
 @dataclass
