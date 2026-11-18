@@ -186,6 +186,9 @@ class CameraManager:
         self._cond = threading.Condition()
         self._thread = None
         self._ctrl = {"exposure_us": None, "gain": None, "ae": True}
+        self._bayer = None            # latest raw frame (sensor levels)
+        self._bayer_pattern = "RGGB"  # synthetic capture is RGGB
+        self._bit_depth = 10
 
     @property
     def available(self):
@@ -234,6 +237,9 @@ class CameraManager:
             # (older picamera2 lacks cfg["sensor"]; the mode knows it too)
             container = int(re.search(r"\d+$", cfg["raw"]["format"]).group())
             self._raw_shift = container - mode["bit_depth"]
+            self._bit_depth = mode["bit_depth"]
+            self._bayer_pattern = blob_detector.bayer_pattern(
+                cfg["raw"]["format"])
             self._picam.start()
             self.set_camera_settings({})  # apply any controls set pre-start
             if "AfMode" in self._picam.camera_controls:
@@ -282,6 +288,7 @@ class CameraManager:
                 self._publish(make_png(320, 240, t), "image/png")
             else:
                 capture = blob_detector.synthetic_capture(self.size, t)
+                self._bayer = capture[1]
                 self._publish(self._detect(*capture), "image/jpeg")
             time.sleep(0.4)
 
@@ -296,7 +303,17 @@ class CameraManager:
         finally:
             request.release()
         bayer = raw[:, :self._raw_width] >> self._raw_shift  # drop row padding
+        self._bayer = bayer  # new array owned by us; safe after release()
         return self._detect(frame, bayer, self._crop_limits, scaler_crop)
+
+    def histogram(self):
+        """R/G/B channel histograms of the latest raw frame, or None."""
+        if self._bayer is None or blob_detector is None:
+            return None
+        return {"bit_depth": self._bit_depth,
+                "pattern": self._bayer_pattern,
+                **blob_detector.channel_histograms(
+                    self._bayer, self._bayer_pattern, self._bit_depth)}
 
     def _detect(self, frame, bayer, crop_limits, scaler_crop):
         """JPEG of frame with each blob and its (x, y) drawn on it."""
@@ -393,6 +410,12 @@ class Handler(BaseHTTPRequestHandler):
             s = self.camera.camera_settings()
             s["available"] = self.camera.available
             self._send_json(200, s)
+        elif self.path == "/api/histogram":
+            hist = self.camera.histogram()
+            if hist is None:
+                self._send_json(503, {"error": "no raw frame captured yet"})
+            else:
+                self._send_json(200, hist)
         else:
             self._send_json(404, {"error": "not found"})
 

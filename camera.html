@@ -24,11 +24,13 @@
   #controls .val { width: 5.5rem; font-variant-numeric: tabular-nums; }
   #controls .hidden { display: none; }
   #controls.disabled input[type="range"] { opacity: .35; }
+  #hist { max-width: 100%; background: #fafafa; }
 </style>
 </head>
 <body>
 
 <img id="cam" src="/api/stream" alt="live camera feed">
+<canvas id="hist" width="512" height="140"></canvas>
 <div id="status"></div>
 
 <div id="controls">
@@ -102,6 +104,37 @@
     showValues();
   }).catch(() => {});
   showValues();
+
+  // --- raw channel histogram, refreshed from /api/histogram ---
+  const hist = document.getElementById('hist');
+  const hctx = hist.getContext('2d');
+
+  function drawHist(d) {
+    const W = hist.width, H = hist.height;
+    hctx.clearRect(0, 0, W, H);
+    hctx.fillStyle = '#888';
+    hctx.font = '10px system-ui';
+    hctx.fillText(`raw ${d.pattern}, ${d.bit_depth}-bit (log counts)`, 4, 10);
+    const max = Math.log10(1 + Math.max(...d.r, ...d.g, ...d.b));
+    for (const [key, color] of [['r', '#d00'], ['g', '#0a0'], ['b', '#00d']]) {
+      const v = d[key];
+      hctx.strokeStyle = color;
+      hctx.beginPath();
+      v.forEach((c, i) => {
+        const x = i / (v.length - 1) * W;
+        const y = H - 2 - (c ? Math.log10(1 + c) / max * (H - 16) : 0);
+        i ? hctx.lineTo(x, y) : hctx.moveTo(x, y);
+      });
+      hctx.stroke();
+    }
+  }
+
+  function pollHist() {
+    fetch('/api/histogram').then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) drawHist(d); }).catch(() => {});
+    setTimeout(pollHist, 1500);
+  }
+  pollHist();
 </script>
 </body>
 </html>

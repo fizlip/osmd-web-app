@@ -3,7 +3,8 @@ import unittest
 import cv2
 import numpy as np
 
-from blob_detector import detect_blobs, process, raw_to_frame, synthetic_capture
+from blob_detector import (bayer_pattern, channel_histograms, detect_blobs,
+                           process, raw_to_frame, synthetic_capture)
 
 
 def bayer_with_spots(*spots, level=1023, size=(480, 640)):
@@ -59,6 +60,28 @@ class DetectBlobsTest(unittest.TestCase):
         self.assertAlmostEqual(blob.x, 200 * 0.5 + 10, delta=1)
         self.assertAlmostEqual(blob.y, 150 * 0.5 + 20, delta=1)
         self.assertAlmostEqual(blob.radius, 15, delta=1)
+
+
+class HistogramTest(unittest.TestCase):
+    def test_parses_bayer_orders_from_format_names(self):
+        for fmt, pattern in [("SRGGB10", "RGGB"), ("SRGGB16", "RGGB"),
+                             ("SBGGR10_CSI2P", "BGGR"), ("SGRBG12", "GRBG"),
+                             ("SGBRG8", "GBRG"), ("BGGR16_PISP_COMP1", "BGGR")]:
+            self.assertEqual(bayer_pattern(fmt), pattern)
+        with self.assertRaises(ValueError):
+            bayer_pattern("YUV420")
+
+    def test_channels_landed_on_the_right_sites(self):
+        bayer = np.zeros((8, 8), np.uint16)
+        bayer[0::2, 0::2] = 11   # RGGB: R site
+        bayer[0::2, 1::2] = 22   # G1
+        bayer[1::2, 0::2] = 33   # G2
+        bayer[1::2, 1::2] = 44   # B
+        h = channel_histograms(bayer, "RGGB", 10)
+        self.assertEqual(len(h["r"]), 1024)
+        self.assertEqual(h["r"][11], 16)
+        self.assertEqual(h["g"][22] + h["g"][33], 32)  # both greens in g
+        self.assertEqual(h["b"][44], 16)
 
 
 class ProcessTest(unittest.TestCase):

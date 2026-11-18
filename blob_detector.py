@@ -10,6 +10,7 @@ coordinates are mapped into the processed preview frame (BGR, what
 Picamera2 returns for "RGB888") so they can be drawn on the stream.
 """
 
+import re
 from dataclasses import dataclass
 
 import cv2
@@ -95,6 +96,33 @@ def annotate(frame, blobs):
         cv2.putText(frame, label, org, cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     (255, 255, 255), 1, cv2.LINE_AA)
     return frame
+
+
+BAYER_OFFSETS = {
+    # (row, col) sites of each colour's samples inside the 2x2 cell
+    "RGGB": {"r": [(0, 0)], "g": [(0, 1), (1, 0)], "b": [(1, 1)]},
+    "BGGR": {"b": [(0, 0)], "g": [(0, 1), (1, 0)], "r": [(1, 1)]},
+    "GRBG": {"g": [(0, 0), (1, 1)], "r": [(0, 1)], "b": [(1, 0)]},
+    "GBRG": {"g": [(0, 0), (1, 1)], "b": [(0, 1)], "r": [(1, 0)]},
+}
+
+
+def bayer_pattern(format_name):
+    """Bayer colour order ("RGGB" etc.) from a raw format like "SRGGB16"."""
+    m = re.search(r"RGGB|BGGR|GRBG|GBRG", format_name)
+    if not m:
+        raise ValueError(f"cannot determine Bayer order from {format_name!r}")
+    return m.group(0)
+
+
+def channel_histograms(bayer, pattern, bit_depth):
+    """Per-channel counts of a raw Bayer frame -> {"r": [...], "g", "b"}."""
+    hists = {}
+    for ch, offs in BAYER_OFFSETS[pattern].items():
+        samples = np.concatenate(
+            [bayer[dy::2, dx::2].ravel() for dy, dx in offs])
+        hists[ch] = np.bincount(samples, minlength=1 << bit_depth).tolist()
+    return hists
 
 
 def process(frame, bayer, crop_limits, scaler_crop,
