@@ -29,9 +29,10 @@ a browser and relays it to an Arduino over USB serial.
   scaled (and, for a wide sensor, centre-cropped) view of the sensor.
   Works on both Pi 4 and Pi 5 raw formats. (0, 0) is the centre of the
   640x480 frame; x grows to the right, y grows downward.
-  The `/camera` page also has an auto-exposure toggle plus exposure-time
-  and gain sliders, sent to `POST /api/camera-settings` (useful for making
-  the scene dark while the laser spot stays saturated).
+  The `/camera` page also has auto-exposure and auto-white-balance
+  toggles plus exposure-time and gain sliders, sent to
+  `POST /api/camera-settings` (useful for making the scene dark while the
+  laser spot stays saturated).
   Without OpenCV installed the stream still works, just without the overlay.
   Tests: `python3 -m unittest test_blob_detector`
 - Designed to extend to 4 motors later: add more fields to the request and

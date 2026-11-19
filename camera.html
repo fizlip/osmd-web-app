@@ -38,6 +38,9 @@
     <input id="ae" type="checkbox" checked> auto exposure
   </label>
   <label>
+    <input id="awb" type="checkbox" checked> auto white balance
+  </label>
+  <label>
     exposure
     <input id="exp" type="range" min="0" max="100" value="50">
     <span class="val" id="expVal"></span>
@@ -56,6 +59,7 @@
     document.getElementById('status').textContent = 'camera stream unavailable');
 
   const ae = document.getElementById('ae');
+  const awb = document.getElementById('awb');
   const exp = document.getElementById('exp');
   const gain = document.getElementById('gain');
   const expVal = document.getElementById('expVal');
@@ -83,14 +87,18 @@
       await fetch('/api/camera-settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ae.checked
-          ? { ae: true }
-          : { ae: false, exposure_us: expUs(), gain: Number(gain.value) }),
+        body: JSON.stringify({
+          awb: awb.checked,
+          ...(ae.checked ? { ae: true }
+                         : { ae: false, exposure_us: expUs(),
+                             gain: Number(gain.value) }),
+        }),
       });
     } catch { /* ignore: slider drags are best-effort */ }
   }
 
   ae.addEventListener('change', () => { showValues(); send(); });
+  awb.addEventListener('change', send);
   exp.addEventListener('input', showValues);
   exp.addEventListener('change', send);
   gain.addEventListener('input', showValues);
@@ -99,6 +107,7 @@
   fetch('/api/camera-settings').then(r => r.json()).then(s => {
     if (s.error) { controls.classList.add('hidden'); return; }
     ae.checked = s.ae !== false;
+    awb.checked = s.awb !== false;
     if (s.exposure_us) exp.value = expUsFrom(s.exposure_us);
     if (s.gain) gain.value = s.gain;
     showValues();

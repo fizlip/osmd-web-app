@@ -185,7 +185,8 @@ class CameraManager:
         self._seq = 0
         self._cond = threading.Condition()
         self._thread = None
-        self._ctrl = {"exposure_us": None, "gain": None, "ae": True}
+        self._ctrl = {"exposure_us": None, "gain": None, "ae": True,
+                      "awb": True}
         self._bayer = None            # latest raw frame (sensor levels)
         self._bayer_pattern = "RGGB"  # synthetic capture is RGGB
         self._bit_depth = 10
@@ -199,19 +200,21 @@ class CameraManager:
         return dict(self._ctrl)
 
     def set_camera_settings(self, settings):
-        """Update exposure controls; remembered for when the camera opens.
-        Keys: ae (bool), exposure_us (int), gain (float)."""
+        """Update exposure/white-balance controls; remembered for when the
+        camera opens. Keys: ae (bool), awb (bool), exposure_us (int),
+        gain (float)."""
         self._ctrl.update(settings)
         if self._picam is None:
             return
+        controls = {"AwbEnable": self._ctrl["awb"]}
         if self._ctrl["ae"]:
-            self._picam.set_controls({"AeEnable": True})
-            return
-        controls = {"AeEnable": False}
-        if self._ctrl["exposure_us"] is not None:
-            controls["ExposureTime"] = self._ctrl["exposure_us"]
-        if self._ctrl["gain"] is not None:
-            controls["AnalogueGain"] = self._ctrl["gain"]
+            controls["AeEnable"] = True
+        else:
+            controls["AeEnable"] = False
+            if self._ctrl["exposure_us"] is not None:
+                controls["ExposureTime"] = self._ctrl["exposure_us"]
+            if self._ctrl["gain"] is not None:
+                controls["AnalogueGain"] = self._ctrl["gain"]
         self._picam.set_controls(controls)
 
     def start(self):
@@ -432,6 +435,8 @@ class Handler(BaseHTTPRequestHandler):
             settings = {}
             if "ae" in data:
                 settings["ae"] = bool(data["ae"])
+            if "awb" in data:
+                settings["awb"] = bool(data["awb"])
             if "exposure_us" in data:
                 v = data["exposure_us"]
                 if isinstance(v, bool) or not (0 < float(v) <= 1e6):
@@ -446,8 +451,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "settings must be numbers in range"})
             return
         if not settings:
-            self._send_json(400, {"error": "expected 'ae', 'exposure_us' "
-                                          "and/or 'gain'"})
+            self._send_json(400, {"error": "expected 'ae', 'awb', "
+                                          "'exposure_us' and/or 'gain'"})
             return
         if not self.camera.available:
             self._send_json(503, {"error": "camera unavailable"})
