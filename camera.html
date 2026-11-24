@@ -22,8 +22,7 @@
   #controls label { display: flex; align-items: center; gap: .6rem; }
   #controls input[type="range"] { width: 12rem; }
   #controls .val { width: 5.5rem; font-variant-numeric: tabular-nums; }
-  #controls.hidden { display: none; }
-  #controls .hidden { display: none; }
+  .hidden { display: none; }
   #controls.disabled input[type="range"] { opacity: .35; }
   #hist { max-width: 100%; background: #fafafa; }
   .btn-row { display: flex; align-items: center; }
@@ -60,7 +59,7 @@
     </svg>
   </button>
 </div>
-<canvas id="hist" width="512" height="140"></canvas>
+<canvas id="hist" width="512" height="140" class="hidden"></canvas>
 <div id="status"></div>
 
 <div id="controls" class="hidden">
@@ -140,8 +139,10 @@
   gain.addEventListener('input', showValues);
   gain.addEventListener('change', send);
 
-  document.getElementById('calibrate').addEventListener('click', () =>
-    controls.classList.toggle('hidden'));
+  document.getElementById('calibrate').addEventListener('click', () => {
+    controls.classList.toggle('hidden');
+    hist.classList.toggle('hidden');
+  });
 
   fetch('/api/camera-settings').then(r => r.json()).then(s => {
     if (s.error) { controls.classList.add('hidden'); return; }
@@ -199,8 +200,10 @@
   }
 
   function pollHist() {
-    fetch('/api/histogram').then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) drawHist(d); }).catch(() => {});
+    if (!hist.classList.contains('hidden')) {
+      fetch('/api/histogram').then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) drawHist(d); }).catch(() => {});
+    }
     setTimeout(pollHist, 1500);
   }
   pollHist();
