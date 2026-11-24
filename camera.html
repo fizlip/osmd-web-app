@@ -27,15 +27,16 @@
   #controls.disabled input[type="range"] { opacity: .35; }
   #hist { max-width: 100%; background: #fafafa; }
   .btn-row { display: flex; align-items: center; }
-  #capture, #calibrate {
+  #capture, #calibrate, #images {
     font: inherit; font-size: .85rem; padding: 1rem 1rem; margin-top: .2rem;
     background: #fff; border-radius: 20px; cursor: pointer;
     box-shadow: 0 0 2px 3px #cbcbcb; border: none;
   }
-  #calibrate { padding: .5rem; box-shadow: none; border: 1px solid #cbcbcb; }
+  #calibrate, #images { padding: .5rem; box-shadow: none; border: 1px solid #cbcbcb; }
   #capture { margin: 0 auto; }
   #calibrate svg, #capture svg, #images svg { display: block; }
-  #capture:active, #calibrate:active { background: #dcdcdc; }
+  #capture:hover, #calibrate:hover, #images:hover { background: #eee; }
+  #capture:active, #calibrate:active, #images:active { background: #dcdcdc; }
 </style>
 </head>
 <body>
