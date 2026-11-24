@@ -21,6 +21,7 @@ whatever order they arrive, or the response deadline passes.
 """
 
 import argparse
+import html
 import io
 import json
 import math
@@ -366,6 +367,48 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_page(self, body: bytes, content_type="text/html; charset=utf-8"):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_images(self, rel: str):
+        """File browser over the images/ tree: directory listings plus the
+        saved frames themselves."""
+        root = IMAGES_DIR.resolve()
+        target = (root / rel).resolve()
+        if target != root and root not in target.parents:
+            self._send_json(404, {"error": "not found"})
+            return
+        if target.is_dir():
+            entries = sorted(target.iterdir(),
+                             key=lambda p: p.name, reverse=True)
+            prefix = f"{rel}/" if rel else ""
+            links = "".join(
+                f'<a href="/images/{prefix}{html.escape(e.name)}">'
+                f'{html.escape(e.name)}{"/" if e.is_dir() else ""}</a>'
+                for e in entries)
+            if rel:
+                parent = "/".join(rel.split("/")[:-1])
+                back = f'<a href="/images/{parent}">&larr; ../</a>'
+            else:
+                back = '<a href="/camera">&larr; camera</a>'
+            body = (f'<!DOCTYPE html><html><head><meta charset="utf-8">'
+                    f'<title>images/{rel}</title></head><body>'
+                    '<style>body{font-family:system-ui;margin:2rem}'
+                    'a{display:block;color:#000;text-decoration:none;'
+                    'padding:.2rem 0}</style>'
+                    f'<h3>images/{rel}</h3>{back}{links}</body></html>')
+            self._send_page(body.encode())
+        elif (target.is_file()
+              and target.suffix.lower() in (".jpg", ".jpeg", ".png")):
+            mime = "image/png" if target.suffix.lower() == ".png" else "image/jpeg"
+            self._send_page(target.read_bytes(), mime)
+        else:
+            self._send_json(404, {"error": "not found"})
+
     def _send_html(self, path: Path):
         body = path.read_bytes()
         self.send_response(200)
@@ -419,6 +462,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(INDEX_HTML)
         elif self.path == "/camera":
             self._send_html(CAMERA_HTML)
+        elif self.path.startswith("/images"):
+            self._send_images(self.path.removeprefix("/images").lstrip("/"))
         elif self.path.startswith("/libs/"):
             self._send_lib(self.path.removeprefix("/libs/"))
         elif self.path == "/api/stream":

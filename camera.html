@@ -209,6 +209,9 @@
   }
   pollHist();
 
+  document.getElementById('images').addEventListener('click', () =>
+    window.open('/images', '_blank'));
+
   document.getElementById('capture').addEventListener('click', async () => {
     const status = document.getElementById('status');
     try {
