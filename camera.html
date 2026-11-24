@@ -23,6 +23,7 @@
   #controls input[type="range"] { width: 12rem; }
   #controls .val { width: 5.5rem; font-variant-numeric: tabular-nums; }
   .hidden { display: none; }
+  #controls.hidden { display: none; }  /* beats #controls' display:flex */
   #controls.disabled input[type="range"] { opacity: .35; }
   #hist { max-width: 100%; background: #fafafa; }
   .btn-row { display: flex; align-items: center; }
