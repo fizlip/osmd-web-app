@@ -386,21 +386,35 @@ class Handler(BaseHTTPRequestHandler):
             entries = sorted(target.iterdir(),
                              key=lambda p: p.name, reverse=True)
             prefix = f"{rel}/" if rel else ""
-            links = "".join(
-                f'<a href="/images/{prefix}{html.escape(e.name)}">'
-                f'{html.escape(e.name)}{"/" if e.is_dir() else ""}</a>'
-                for e in entries)
+            dirs, files = [], []
+            for e in entries:
+                if e.is_dir():
+                    dirs.append(
+                        f'<a href="/images/{prefix}{html.escape(e.name)}">'
+                        f'{html.escape(e.name)}/</a>')
+                elif e.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                    files.append(
+                        f'<a href="/images/{prefix}{html.escape(e.name)}">'
+                        f'<img src="/images/{prefix}{html.escape(e.name)}" '
+                        f'loading="lazy"></a>')
             if rel:
                 parent = "/".join(rel.split("/")[:-1])
                 back = f'<a href="/images/{parent}">&larr; ../</a>'
             else:
                 back = '<a href="/camera">&larr; camera</a>'
+            grid = (f'<div class="grid">{"".join(files)}</div>'
+                    if files else "")
             body = (f'<!DOCTYPE html><html><head><meta charset="utf-8">'
                     f'<title>images/{rel}</title></head><body>'
                     '<style>body{font-family:system-ui;margin:2rem}'
                     'a{display:block;color:#000;text-decoration:none;'
-                    'padding:.2rem 0}</style>'
-                    f'<h3>images/{rel}</h3>{back}{links}</body></html>')
+                    'padding:.2rem 0}'
+                    '.grid{display:grid;gap:.5rem;margin-top:.5rem;'
+                    'grid-template-columns:repeat(auto-fill,'
+                    'minmax(180px,1fr))}'
+                    '.grid img{width:100%;display:block}</style>'
+                    f'<h3>images/{rel}</h3>{back}{"".join(dirs)}{grid}'
+                    '</body></html>')
             self._send_page(body.encode())
         elif (target.is_file()
               and target.suffix.lower() in (".jpg", ".jpeg", ".png")):
