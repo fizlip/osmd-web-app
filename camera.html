@@ -26,7 +26,7 @@
   #controls .hidden { display: none; }
   #controls.disabled input[type="range"] { opacity: .35; }
   #hist { max-width: 100%; background: #fafafa; }
-  .btn-row { display: flex; width: 100%; align-items: center; }
+  .btn-row { display: flex; align-items: center; }
   #capture, #calibrate {
     font: inherit; font-size: .85rem; padding: 1rem 1rem; margin-top: .2rem;
     background: #fff; border-radius: 20px; cursor: pointer;
@@ -69,8 +69,14 @@
 <a href="/">&larr; controls</a>
 
 <script>
-  document.getElementById('cam').addEventListener('error', () =>
+  const cam = document.getElementById('cam');
+  cam.addEventListener('error', () =>
     document.getElementById('status').textContent = 'camera stream unavailable');
+
+  // keep the button row the same width as the camera image
+  new ResizeObserver(() => {
+    document.querySelector('.btn-row').style.width = cam.clientWidth + 'px';
+  }).observe(cam);
 
   const ae = document.getElementById('ae');
   const awb = document.getElementById('awb');
