@@ -27,6 +27,7 @@ import math
 import re
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -53,6 +54,7 @@ CAM_FPS = 10.0
 INDEX_HTML = Path(__file__).with_name("index.html")
 CAMERA_HTML = Path(__file__).with_name("camera.html")
 LIBS_DIR = Path(__file__).with_name("libs")
+IMAGES_DIR = Path(__file__).with_name("images")
 
 
 def format_angle(angle: float) -> str:
@@ -323,6 +325,21 @@ class CameraManager:
         return blob_detector.process(frame, bayer, crop_limits, scaler_crop,
                                      **self.blob_args)[0]
 
+    def save_capture(self):
+        """Write the latest annotated frame to images/<YYYY-MM-DD>/.
+        -> Path, or None if no frame has been captured yet."""
+        with self._cond:
+            if self._frame is None:
+                return None
+            data, mime = self._frame
+        ext = ".jpg" if mime == "image/jpeg" else ".png"
+        now = datetime.now()
+        day_dir = IMAGES_DIR / now.strftime("%Y-%m-%d")
+        day_dir.mkdir(parents=True, exist_ok=True)
+        path = day_dir / (now.strftime("%H-%M-%S-%f")[:-3] + ext)
+        path.write_bytes(data)
+        return path
+
     def _publish(self, data, mime):
         with self._cond:
             self._frame = (data, mime)
@@ -460,12 +477,23 @@ class Handler(BaseHTTPRequestHandler):
         self.camera.set_camera_settings(settings)
         self._send_json(200, {"ok": True})
 
+    def _capture(self):
+        path = self.camera.save_capture()
+        if path is None:
+            self._send_json(503, {"error": "no frame captured yet"})
+        else:
+            self._send_json(200, {"ok": True,
+                                  "path": str(path.relative_to(
+                                      IMAGES_DIR.parent))})
+
     def do_POST(self):
         data = self._read_json()
         if data is None:
             return
         if self.path == "/api/camera-settings":
             self._camera_settings(data)
+        elif self.path == "/api/capture":
+            self._capture()
         elif self.path == "/api/rotate":
             self._rotate(data)
         else:

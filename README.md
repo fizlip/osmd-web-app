@@ -32,7 +32,9 @@ a browser and relays it to an Arduino over USB serial.
   The `/camera` page also has auto-exposure and auto-white-balance
   toggles plus exposure-time and gain sliders, sent to
   `POST /api/camera-settings` (useful for making the scene dark while the
-  laser spot stays saturated).
+  laser spot stays saturated). A "capture image" button saves the current
+  annotated frame (blob overlay included) to
+  `images/<YYYY-MM-DD>/<HH-MM-SS-ms>.jpg` via `POST /api/capture`.
   Without OpenCV installed the stream still works, just without the overlay.
   Tests: `python3 -m unittest test_blob_detector`
 - Designed to extend to 4 motors later: add more fields to the request and

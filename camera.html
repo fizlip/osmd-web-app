@@ -25,6 +25,12 @@
   #controls .hidden { display: none; }
   #controls.disabled input[type="range"] { opacity: .35; }
   #hist { max-width: 100%; background: #fafafa; }
+  #capture {
+    font: inherit; font-size: .85rem; padding: .3rem 1rem; margin-top: .2rem;
+    background: #fff; border-radius: 20px; cursor: pointer;
+    box-shadow: 0 0 0 1px #ddd; border: none;
+  }
+  #capture:active { background: #dcdcdc; }
 </style>
 </head>
 <body>
@@ -40,6 +46,7 @@
   <label>
     <input id="awb" type="checkbox" checked> auto white balance
   </label>
+  <button id="capture" type="button">capture image</button>
   <label>
     exposure
     <input id="exp" type="range" min="0" max="100" value="50">
@@ -165,6 +172,18 @@
     setTimeout(pollHist, 1500);
   }
   pollHist();
+
+  document.getElementById('capture').addEventListener('click', async () => {
+    const status = document.getElementById('status');
+    try {
+      const j = await fetch('/api/capture', { method: 'POST' })
+        .then(r => r.json());
+      status.textContent = j.ok ? 'saved ' + j.path
+                                : (j.error || 'capture failed');
+    } catch {
+      status.textContent = 'capture failed';
+    }
+  });
 </script>
 </body>
 </html>
