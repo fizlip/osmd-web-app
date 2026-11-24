@@ -32,8 +32,8 @@
     background: #fff; border-radius: 20px; cursor: pointer;
     box-shadow: 0 0 2px 3px #cbcbcb; border: none;
   }
-  #calibrate { padding: .3rem .9rem; box-shadow: none; border: 1px solid #cbcbcb; }
   #capture { margin: 0 auto; }
+  #calibrate svg, #capture svg { display: block; }
   #capture:active, #calibrate:active { background: #dcdcdc; }
 </style>
 </head>
@@ -41,8 +41,16 @@
 
 <img id="cam" src="/api/stream" alt="live camera feed">
 <div class="btn-row">
-  <button id="calibrate" type="button">calibrate</button>
+  <button id="calibrate" type="button" aria-label="calibrate">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.4" fill="#fff"/>
+      <line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2.4" fill="#fff"/>
+      <line x1="4" y1="17" x2="20" y2="17"/><circle cx="7" cy="17" r="2.4" fill="#fff"/>
+    </svg>
+  </button>
   <button id="capture" type="button"></button>
+  <button id="images" type="button"></button>
 </div>
 <canvas id="hist" width="512" height="140"></canvas>
 <div id="status"></div>
