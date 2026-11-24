@@ -22,31 +22,37 @@
   #controls label { display: flex; align-items: center; gap: .6rem; }
   #controls input[type="range"] { width: 12rem; }
   #controls .val { width: 5.5rem; font-variant-numeric: tabular-nums; }
+  #controls.hidden { display: none; }
   #controls .hidden { display: none; }
   #controls.disabled input[type="range"] { opacity: .35; }
   #hist { max-width: 100%; background: #fafafa; }
-  #capture {
-    font: inherit; font-size: .85rem; padding: .3rem 1rem; margin-top: .2rem;
+  .btn-row { display: flex; gap: .6rem; align-items: center; }
+  #capture, #calibrate {
+    font: inherit; font-size: .85rem; padding: 1rem 1rem; margin-top: .2rem;
     background: #fff; border-radius: 20px; cursor: pointer;
-    box-shadow: 0 0 0 1px #ddd; border: none;
+    box-shadow: 0 0 2px 3px #cbcbcb; border: none;
   }
-  #capture:active { background: #dcdcdc; }
+  #calibrate { padding: .3rem .9rem; }
+  #capture:active, #calibrate:active { background: #dcdcdc; }
 </style>
 </head>
 <body>
 
 <img id="cam" src="/api/stream" alt="live camera feed">
+<div class="btn-row">
+  <button id="calibrate" type="button">calibrate</button>
+  <button id="capture" type="button"></button>
+</div>
 <canvas id="hist" width="512" height="140"></canvas>
 <div id="status"></div>
 
-<div id="controls">
+<div id="controls" class="hidden">
   <label>
     <input id="ae" type="checkbox" checked> auto exposure
   </label>
   <label>
     <input id="awb" type="checkbox" checked> auto white balance
   </label>
-  <button id="capture" type="button">capture image</button>
   <label>
     exposure
     <input id="exp" type="range" min="0" max="100" value="50">
@@ -110,6 +116,9 @@
   exp.addEventListener('change', send);
   gain.addEventListener('input', showValues);
   gain.addEventListener('change', send);
+
+  document.getElementById('calibrate').addEventListener('click', () =>
+    controls.classList.toggle('hidden'));
 
   fetch('/api/camera-settings').then(r => r.json()).then(s => {
     if (s.error) { controls.classList.add('hidden'); return; }
