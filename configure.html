@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>OSMD Testbench &middot; configure</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #fff; color: #000;
+    font-family: system-ui, -apple-system, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 1.25rem; padding: 1rem;
+    -webkit-user-select: none; user-select: none;
+  }
+  table { border-collapse: collapse; }
+  th, td { padding: .35rem .5rem; font-weight: 400; text-align: left; }
+  th { font-size: .85rem; color: #888; }
+  td.motor { font-weight: 600; }
+  input {
+    width: 7rem; font: inherit; font-size: 1rem; padding: .35rem .6rem;
+    border: none; border-radius: 20px; box-shadow: 0 0 0 1px #ddd;
+    text-align: right;
+  }
+  #send { background: #4172ff; color: #fff; padding: .6rem 1.8rem; font-size: 1.1rem;
+          border: none; border-radius: 20px; cursor: pointer; }
+  #send:active { background: #2c53cc; }
+  #status { min-height: 1.2em; font-size: .85rem; color: #888; white-space: pre-wrap; }
+  #status.err { color: #c00; }
+  nav {
+    position: fixed; top: 0; left: 0;
+    display: flex; gap: 1rem; padding: .7rem 1rem;
+    font-size: .85rem; background: #fff;
+  }
+  nav a { color: #888; text-decoration: none; }
+  nav a.here { color: #000; font-weight: 600; }
+  nav a.title {
+    font-weight: 600;
+    color: #4172ff;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="title">OSMD Testbench</a>
+  <a href="/">controls</a>
+  <a href="/camera">camera</a>
+  <a href="/configure" class="here">configure</a>
+</nav>
+
+<table>
+  <tr><th></th><th>max velocity</th><th>max acceleration</th></tr>
+  <tr>
+    <td class="motor">DET_POL</td>
+    <td><input id="pol-maxv" type="number" step="any" min="0"></td>
+    <td><input id="pol-maxa" type="number" step="any" min="0"></td>
+  </tr>
+  <tr>
+    <td class="motor">DET_AZ</td>
+    <td><input id="az-maxv" type="number" step="any" min="0"></td>
+    <td><input id="az-maxa" type="number" step="any" min="0"></td>
+  </tr>
+</table>
+
+<button id="send">Send</button>
+<div id="status"></div>
+
+<script>
+const statusEl = document.getElementById('status');
+
+// fields left blank are not sent; each filled field becomes
+// "MAXV <motor> <value>" or "MAXA <motor> <value>"
+document.getElementById('send').addEventListener('click', async () => {
+  const payload = { maxv: {}, maxa: {} };
+  for (const [id, motor] of [['pol', 'DET_POL'], ['az', 'DET_AZ']]) {
+    for (const kind of ['maxv', 'maxa']) {
+      const raw = document.getElementById(`${id}-${kind}`).value.trim();
+      if (raw === '') continue;
+      const v = parseFloat(raw);
+      if (!Number.isFinite(v) || v < 0) {
+        statusEl.textContent = `${id}-${kind}: invalid value`;
+        statusEl.className = 'err';
+        return;
+      }
+      payload[kind][motor] = v;
+    }
+  }
+  if (!Object.keys(payload.maxv).length && !Object.keys(payload.maxa).length) {
+    statusEl.textContent = 'enter at least one value';
+    statusEl.className = 'err';
+    return;
+  }
+  statusEl.textContent = 'sending…';
+  statusEl.className = '';
+  try {
+    const r = await fetch('/api/configure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.error || !j.ok) {
+      statusEl.textContent = j.error || j.response || 'failed';
+      statusEl.className = 'err';
+    } else {
+      statusEl.textContent = j.response || 'OK';
+    }
+  } catch {
+    statusEl.textContent = 'server unreachable';
+    statusEl.className = 'err';
+  }
+});
+</script>
+</body>
+</html>

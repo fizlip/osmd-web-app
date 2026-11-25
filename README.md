@@ -37,6 +37,12 @@ a browser and relays it to an Arduino over USB serial.
   `images/<YYYY-MM-DD>/<HH-MM-SS-ms>.jpg` via `POST /api/capture`.
   Without OpenCV installed the stream still works, just without the overlay.
   Tests: `python3 -m unittest test_blob_detector`
+- Configure: `GET /configure` serves a page with max-velocity and
+  max-acceleration fields for `DET_POL` and `DET_AZ`, sent via
+  `POST /api/configure` with e.g. `{"maxv": {"DET_POL": 600},
+  "maxa": {"DET_AZ": 30}}`. Each filled field becomes a `MAXV <motor>
+  <value>` or `MAXA <motor> <value>` serial command; the firmware replies
+  `SUCCESS <cmd>` then `OK`, or `ERROR <msg>`.
 - Designed to extend to 4 motors later: add more fields to the request and
   more command strings
 

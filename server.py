@@ -13,6 +13,10 @@ Serves a single-page UI plus a small JSON API:
                          and returns {"ok": bool, "response": "..."}
                          Either field may be omitted; "angle" is a legacy
                          alias for "polar".
+    POST /api/configure {"maxv": {"DET_POL": 600}, "maxa": {"DET_AZ": 30}}
+                         -> sends "MAXV <motor> <v>" / "MAXA <motor> <v>"
+                         per entry; each ends with a bare "OK" after its
+                         "SUCCESS ..." line, or fails on "ERROR ...".
 
 Commands are written back-to-back so the FreeRTOS firmware can move the
 motors in parallel; the reply is accumulated until each command's
@@ -54,6 +58,7 @@ CAM_SIZE = (640, 480)
 CAM_FPS = 10.0
 INDEX_HTML = Path(__file__).with_name("index.html")
 CAMERA_HTML = Path(__file__).with_name("camera.html")
+CONFIGURE_HTML = Path(__file__).with_name("configure.html")
 LIBS_DIR = Path(__file__).with_name("libs")
 IMAGES_DIR = Path(__file__).with_name("images")
 
@@ -93,13 +98,16 @@ class SerialManager:
         time.sleep(RESET_DELAY)          # let the Arduino finish rebooting
         self._ser.reset_input_buffer()   # drop bootloader chatter
 
-    def send(self, commands, timeout: float = RESPONSE_TIMEOUT):
+    def send(self, commands, timeout: float = RESPONSE_TIMEOUT, acks=None):
         """Write all commands back-to-back (FreeRTOS runs the motors in
         parallel), then read until every command's '<MOTOR> OK' ack has been
-        seen, in whatever order they arrive. Returns (all_acked, text)."""
+        seen, in whatever order they arrive. Returns (all_acked, text).
+        Pass acks to override the expected completion lines (e.g. MAXV/MAXA
+        commands end with a bare 'OK'); an 'ERROR' line always fails fast."""
         if isinstance(commands, str):
             commands = [commands]
-        acks = [expected_ack(c) for c in commands]
+        if acks is None:
+            acks = [expected_ack(c) for c in commands]
         with self._lock:
             if self.simulate:
                 time.sleep(0.2)
@@ -129,8 +137,10 @@ class SerialManager:
                     while b"\n" in buf:
                         raw, buf = buf.split(b"\n", 1)
                         line = raw.decode("utf-8", "replace").strip()
-                        pending.discard(line)
                         lines.append(line)
+                        if line.startswith("ERROR"):
+                            return False, "\n".join(lines)
+                        pending.discard(line)
                     tail = buf.strip()  # final ack may arrive without newline
                     if tail in pending:
                         lines.append(tail.decode("utf-8", "replace"))
@@ -476,6 +486,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(INDEX_HTML)
         elif self.path == "/camera":
             self._send_html(CAMERA_HTML)
+        elif self.path == "/configure":
+            self._send_html(CONFIGURE_HTML)
         elif self.path.startswith("/images"):
             self._send_images(self.path.removeprefix("/images").lstrip("/"))
         elif self.path.startswith("/libs/"):
@@ -555,6 +567,8 @@ class Handler(BaseHTTPRequestHandler):
             self._capture()
         elif self.path == "/api/rotate":
             self._rotate(data)
+        elif self.path == "/api/configure":
+            self._configure(data)
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -589,6 +603,38 @@ class Handler(BaseHTTPRequestHandler):
 
         ok, response = self.manager.send(commands)
         self._send_json(200, {"ok": ok, "response": response})
+
+    def _configure(self, data):
+        """Motor limits: {"maxv": {"DET_POL": 600}, "maxa": {"DET_AZ": 30}}.
+        Sends e.g. 'MAXV DET_POL 600'; each command ends with a bare 'OK'
+        (after its 'SUCCESS ...' line) or an 'ERROR ...' line."""
+        try:
+            commands = []
+            for key, word in (("maxv", "MAXV"), ("maxa", "MAXA")):
+                for motor, value in (data.get(key) or {}).items():
+                    if (motor not in ("DET_POL", "DET_AZ")
+                            or isinstance(value, bool)
+                            or not math.isfinite(float(value))
+                            or float(value) < 0):
+                        raise ValueError(motor)
+                    commands.append(
+                        f"{word} {motor} {format_angle(float(value))}")
+        except (ValueError, TypeError, AttributeError):
+            self._send_json(400, {"error": "expected non-negative numbers "
+                                          "under 'maxv'/'maxa' for DET_POL "
+                                          "and/or DET_AZ"})
+            return
+        if not commands:
+            self._send_json(400, {"error": "expected 'maxv' and/or 'maxa'"})
+            return
+
+        ok, lines = True, []
+        for cmd in commands:
+            ok, text = self.manager.send(cmd, acks=["OK"])
+            lines.append(text)
+            if not ok:
+                break
+        self._send_json(200, {"ok": ok, "response": "\n".join(lines)})
 
 
 def main():
