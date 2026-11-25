@@ -14,6 +14,12 @@
   }
   img { max-width: 100%; max-height: 75vh; background: #eee; border-radius: 12px; }
   a, #status { font-size: .85rem; color: #888; text-decoration: none; }
+  nav {
+    position: fixed; top: 0; left: 0;
+    display: flex; gap: 1rem; padding: .7rem 1rem;
+    font-size: .85rem; background: #fff;
+  }
+  nav a.here { color: #000; font-weight: 600; }
   #status { min-height: 1.2em; }
   #controls {
     display: flex; flex-direction: column; gap: .4rem;
@@ -40,6 +46,11 @@
 </style>
 </head>
 <body>
+
+<nav>
+  <a href="/">controls</a>
+  <a href="/camera" class="here">camera</a>
+</nav>
 
 <img id="cam" src="/api/stream" alt="live camera feed">
 <div class="btn-row">
@@ -87,8 +98,6 @@
     <button id="intervalGo" type="button">start</button>
   </label>
 </div>
-
-<a href="/">&larr; controls</a>
 
 <script>
   const cam = document.getElementById('cam');

@@ -40,10 +40,21 @@
   }
   #status { min-height: 1.2em; font-size: .85rem; color: #888; }
   #status.err { color: #c00; }
-  .nav { font-size: .85rem; color: #888; text-decoration: none; }
+  nav {
+    position: fixed; top: 0; left: 0;
+    display: flex; gap: 1rem; padding: .7rem 1rem;
+    font-size: .85rem; background: #fff;
+  }
+  nav a { color: #888; text-decoration: none; }
+  nav a.here { color: #000; font-weight: 600; }
 </style>
 </head>
 <body>
+
+<nav>
+  <a href="/" class="here">controls</a>
+  <a href="/camera">camera</a>
+</nav>
 
 <canvas id="sphere"></canvas>
 <div id="readout"></div>
@@ -68,7 +79,6 @@
 </div>
 
 <div id="status"></div>
-<a class="nav" href="/camera">camera &rarr;</a>
 
 <script type="module">
 import * as THREE from './libs/three.module.min.js';
