@@ -15,7 +15,7 @@ a browser and relays it to an Arduino over USB serial.
   command's `<motor> OK` ack (`DET_POL OK`, `DET_AZ OK`) has been seen,
   and the combined text is returned
 - Telemetry: `GET /api/steps` sends `STEPS DET_POL` and `STEPS DET_AZ` and
-  returns each motor's step count and encoder value; the controls page
+  parses each reply's `<steps>,<enc_count>` tuple; the controls page
   shows them (with the steps-encoder delta) after every successful move
 - The serial port is opened once and kept open (opening `/dev/ttyACM0` toggles
   DTR, which resets the Arduino — re-opening per click would reset it every time)

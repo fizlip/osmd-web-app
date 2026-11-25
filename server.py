@@ -639,18 +639,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": ok, "response": "\n".join(lines)})
 
     def _steps(self):
-        """'STEPS <motor>' per motor -> last two numbers in the reply are
-        taken as (steps, encoder); works for 'STEPS DET_POL 1200 1198',
-        'SUCCESS STEPS DET_POL 1200 1198', 'S:1200 E:1198', ..."""
+        """'STEPS <motor>' -> '<steps>,<enc_count>' then 'OK'. Falls back to
+        the reply's last two integers if no '<n>,<n>' line is found."""
         motors, lines, ok = {}, [], True
         for motor in ("DET_POL", "DET_AZ"):
             ok, text = self.manager.send(f"STEPS {motor}", acks=["OK"])
             lines.append(text)
             if not ok:
                 break
-            nums = [int(n) for n in re.findall(r"-?\d+", text)]
+            m = re.search(r"(-?\d+)\s*,\s*(-?\d+)", text)
+            nums = ([int(m[1]), int(m[2])] if m
+                    else [int(n) for n in re.findall(r"-?\d+", text)][-2:])
             if len(nums) >= 2:
-                motors[motor] = {"steps": nums[-2], "enc": nums[-1]}
+                motors[motor] = {"steps": nums[0], "enc": nums[1]}
         self._send_json(200, {"ok": ok, "motors": motors,
                               "response": "\n".join(lines)})
 
