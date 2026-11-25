@@ -501,6 +501,8 @@ class Handler(BaseHTTPRequestHandler):
             s = self.camera.camera_settings()
             s["available"] = self.camera.available
             self._send_json(200, s)
+        elif self.path == "/api/steps":
+            self._steps()
         elif self.path == "/api/histogram":
             hist = self.camera.histogram()
             if hist is None:
@@ -635,6 +637,22 @@ class Handler(BaseHTTPRequestHandler):
             if not ok:
                 break
         self._send_json(200, {"ok": ok, "response": "\n".join(lines)})
+
+    def _steps(self):
+        """'STEPS <motor>' per motor -> last two numbers in the reply are
+        taken as (steps, encoder); works for 'STEPS DET_POL 1200 1198',
+        'SUCCESS STEPS DET_POL 1200 1198', 'S:1200 E:1198', ..."""
+        motors, lines, ok = {}, [], True
+        for motor in ("DET_POL", "DET_AZ"):
+            ok, text = self.manager.send(f"STEPS {motor}", acks=["OK"])
+            lines.append(text)
+            if not ok:
+                break
+            nums = [int(n) for n in re.findall(r"-?\d+", text)]
+            if len(nums) >= 2:
+                motors[motor] = {"steps": nums[-2], "enc": nums[-1]}
+        self._send_json(200, {"ok": ok, "motors": motors,
+                              "response": "\n".join(lines)})
 
 
 def main():

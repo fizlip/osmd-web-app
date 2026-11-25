@@ -40,6 +40,14 @@
   }
   #status { min-height: 1.2em; font-size: .85rem; color: #888; }
   #status.err { color: #c00; }
+  #telemetry {
+    font-size: .85rem; color: #888;
+    font-variant-numeric: tabular-nums;
+    display: flex; flex-direction: column; gap: .15rem;
+  }
+  #telemetry .trow { display: flex; gap: 1rem; align-items: baseline; }
+  #telemetry .motor { font-weight: 600; color: #000; width: 4.5rem; }
+  #telemetry b { font-weight: 400; color: #000; }
   nav {
     position: fixed; top: 0; left: 0;
     display: flex; gap: 1rem; padding: .7rem 1rem;
@@ -85,6 +93,21 @@
 </div>
 
 <div id="status"></div>
+
+<div id="telemetry">
+  <div class="trow">
+    <span class="motor">DET_POL</span>
+    <span>steps <b id="pol-steps">–</b></span>
+    <span>enc <b id="pol-enc">–</b></span>
+    <span>&Delta; <b id="pol-delta">–</b></span>
+  </div>
+  <div class="trow">
+    <span class="motor">DET_AZ</span>
+    <span>steps <b id="az-steps">–</b></span>
+    <span>enc <b id="az-enc">–</b></span>
+    <span>&Delta; <b id="az-delta">–</b></span>
+  </div>
+</div>
 
 <script type="module">
 import * as THREE from './libs/three.module.min.js';
@@ -402,6 +425,7 @@ async function send(body) {
       return false;
     }
     statusEl.textContent = 'OK';
+    readSteps();
     return true;
   } catch {
     statusEl.textContent = 'server unreachable';
@@ -410,6 +434,24 @@ async function send(body) {
   } finally {
     sending = false;
   }
+}
+
+// --- telemetry: steps/encoder per motor, refreshed after each move ---
+// delta = steps - encoder; nonzero means missed/extra steps
+async function readSteps() {
+  try {
+    const r = await fetch('/api/steps');
+    const j = await r.json();
+    for (const [prefix, motor] of [['pol', 'DET_POL'], ['az', 'DET_AZ']]) {
+      const m = j.motors && j.motors[motor];
+      document.getElementById(prefix + '-steps').textContent =
+        m ? m.steps : '–';
+      document.getElementById(prefix + '-enc').textContent =
+        m ? m.enc : '–';
+      document.getElementById(prefix + '-delta').textContent =
+        m ? m.steps - m.enc : '–';
+    }
+  } catch { /* telemetry is best-effort; leave last values */ }
 }
 
 function tick() {
